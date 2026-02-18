@@ -450,6 +450,13 @@ local function _AuraHasSpellId(unit, spellId, isDebuff)
     return false
   end
 
+  if unit == "target" and DoiteTargetAuras then
+    if isDebuff then
+      return DoiteTargetAuras.HasDebuffSpellId(spellId)
+    end
+    return DoiteTargetAuras.HasBuffSpellId(spellId)
+  end
+
   local auras = _GetUnitAuraTable(unit, isDebuff)
   if type(auras) ~= "table" then
     return false
