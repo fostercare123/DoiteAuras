@@ -2743,6 +2743,12 @@ _GetAuraStacksOnUnit = function(unit, auraName, wantDebuff)
     else
       return DoiteTargetAuras.GetBuffStacks(auraName)
     end
+  elseif unit == "target" then
+    if wantDebuff then
+      return DoiteTargetAuras.GetDebuffStacks(auraName)
+    else
+      return DoiteTargetAuras.GetBuffStacks(auraName)
+    end
   end
 
   -- fallback logic for units other than current target
@@ -2826,20 +2832,13 @@ end
 
 -- Fast check: does unit have ANY of the named buffs?
 local function _TargetHasAnyBuffName(names)
-  local unit = "target"
-  if not unit or not names then
-    return false
-  end
-
-  local snap = auraSnapshot[unit]
-  local b = snap and snap.buffs
-  if not b then
+  if not names or not UnitExists("target") then
     return false
   end
 
   local n = table.getn(names)
   for i = 1, n do
-    if b[names[i]] then
+    if DoiteTargetAuras.HasBuff(names[i]) then
       return true
     end
   end
@@ -4324,12 +4323,7 @@ function DoiteConditions:ProcessPendingAuraScans()
   -- Target: scan if (and only if) target aura tracking is in use; else keep snapshot empty.
   if self._pendingAuraScanTarget then
     self._pendingAuraScanTarget = false
-
-    if _hasAnyTargetAuraUsage and UnitExists and UnitExists("target") then
-      _ScanTargetUnitAuras()
-    else
-      self:_ClearTargetAuraSnapshot()
-    end
+    self:_ClearTargetAuraSnapshot()
   end
 end
 
@@ -5444,41 +5438,31 @@ local function CheckAuraConditions(data)
 
   -- Target (help) — requires friendly target (already gated above)
   if (not found) and allowHelp then
-    local s = auraSnapshot.target
-    if s then
-      local hit = false
+    local hit = false
 
-      -- Buff-type icons: unchanged.
-      if wantBuff and s.buffs[name] then
-        hit = true
-        -- Debuff-type icons: overflow-aware.
-      elseif wantDebuff and _TargetHasOverflowDebuff(name) then
-        hit = true
-      end
+    if wantBuff and DoiteTargetAuras.HasBuff(name) then
+      hit = true
+    elseif wantDebuff and _TargetHasOverflowDebuff(name) then
+      hit = true
+    end
 
-      if hit then
-        found = true
-      end
+    if hit then
+      found = true
     end
   end
 
   -- Target (harm) — requires hostile target (already gated above)
   if (not found) and allowHarm then
-    local s = auraSnapshot.target
-    if s then
-      local hit = false
+    local hit = false
 
-      -- Buff-type icons: unchanged.
-      if wantBuff and s.buffs[name] then
-        hit = true
-        -- Debuff-type icons: overflow-aware.
-      elseif wantDebuff and _TargetHasOverflowDebuff(name) then
-        hit = true
-      end
+    if wantBuff and DoiteTargetAuras.HasBuff(name) then
+      hit = true
+    elseif wantDebuff and _TargetHasOverflowDebuff(name) then
+      hit = true
+    end
 
-      if hit then
-        found = true
-      end
+    if hit then
+      found = true
     end
   end
 
@@ -7100,10 +7084,7 @@ end
 
 _tick:SetScript("OnUpdate", _DoiteConditions_OnUpdateWrapper)
 
--- Prime aura snapshot and trigger initial evaluation
-if _G.UnitExists and _G.UnitExists("target") then
-  DoiteConditions_ScanUnitAuras("target")
-end
+-- Prime evaluation flags
 dirty_ability, dirty_aura, dirty_target, dirty_power = true, true, true, true
 
 ---------------------------------------------------------------
@@ -7132,10 +7113,7 @@ eventFrame:RegisterEvent("RAID_ROSTER_UPDATE")
 
 eventFrame:SetScript("OnEvent", function()
   if event == "PLAYER_ENTERING_WORLD" then
-    -- Initial aura scan
-    if _G.UnitExists and _G.UnitExists("target") then
-      DoiteConditions_ScanUnitAuras("target")
-    end
+    -- Target aura cache is maintained by DoiteTargetAuras module.
     dirty_ability, dirty_aura, dirty_target, dirty_power = true, true, true, true
 
     -- Cache player class for lightweight warrior-specific logic + range overrides
@@ -7165,15 +7143,6 @@ eventFrame:SetScript("OnEvent", function()
     if arg1 == "player" then
       dirty_aura = true
       dirty_ability = true
-
-    elseif arg1 == "target" then
-      -- Only bother if *any* config ever looks at target auras.
-      if _hasAnyTargetAuraUsage then
-        -- Coalesce scan/clear into OnUpdate (once per frame)
-        DoiteConditions._pendingAuraScanTarget = true
-        dirty_aura = true
-        dirty_ability = true
-      end
     end
 
   elseif event == "SPELLS_CHANGED" then
@@ -7186,22 +7155,7 @@ eventFrame:SetScript("OnEvent", function()
     dirty_ability = true
 
   elseif event == "PLAYER_TARGET_CHANGED" then
-    -- If target aura tracking is used anywhere, scan/clear once in OnUpdate. Otherwise, keep snapshot empty so no stale target aura data can ever match.
-    if _hasAnyTargetAuraUsage then
-      DoiteConditions._pendingAuraScanTarget = true
-    else
-      local snap = _G.DoiteConditions_AuraSnapshot
-      local s = snap and snap.target
-      if s then
-        for k in pairs(s.buffs) do
-          s.buffs[k] = nil
-        end
-        for k in pairs(s.debuffs) do
-          s.debuffs[k] = nil
-        end
-      end
-    end
-
+    DoiteConditions._pendingAuraScanTarget = true
     dirty_target, dirty_aura = true, true
     dirty_ability = true
 
