@@ -229,6 +229,13 @@ function DoiteTargetAuras.GetDebuffStacks(spellName)
 end
 
 function DoiteTargetAuras.HasBuffSpellId(spellId)
+  local i
+  for i = 1, MAX_BUFF_SLOTS do
+    if DoiteTargetAuras.buffs[i].spellId == spellId then
+      return true
+    end
+  end
+
   local spellName = DoiteTargetAuras.spellIdToNameCache[spellId]
   if not spellName then
     spellName = GetSpellRecField(spellId, "name")
@@ -244,6 +251,13 @@ function DoiteTargetAuras.HasBuffSpellId(spellId)
 end
 
 function DoiteTargetAuras.HasDebuffSpellId(spellId)
+  local i
+  for i = 1, MAX_DEBUFF_SLOTS do
+    if DoiteTargetAuras.debuffs[i].spellId == spellId then
+      return true
+    end
+  end
+
   local spellName = DoiteTargetAuras.spellIdToNameCache[spellId]
   if not spellName then
     spellName = GetSpellRecField(spellId, "name")
