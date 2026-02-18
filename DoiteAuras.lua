@@ -142,7 +142,7 @@ end
 -- Nampower / UnitXP SP3 requirement helper
 -- Requires UnitXP & a specific Nampower version
 ---------------------------------------------------------------
-local _NP_REQ_MAJOR, _NP_REQ_MINOR, _NP_REQ_PATCH = 2, 25, 0 -- Change when needed
+local _NP_REQ_MAJOR, _NP_REQ_MINOR, _NP_REQ_PATCH = 2, 38, 0 -- Change when needed
 
 local function _NP_GetVersion()
   if type(GetNampowerVersion) == "function" then
