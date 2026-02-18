@@ -173,7 +173,6 @@ local dirty_power = false
 local dirty_ability_time = false
 
 -- Coalesced aura scans (set in events; consumed in OnUpdate)
-DoiteConditions._pendingAuraScanTarget = false
 
 ----------------------------------------------------------------
 -- One-shot repaint next frame (avoids re-entrancy inside events)
@@ -354,92 +353,6 @@ local function _MaybeResolveSpellIdForEntry(key, data)
   end
 end
 
-local _trackedByName, _trackedBuiltAt = nil, 0
-
--- Pool list tables to avoid repeated allocations during frequent rebuilds (esp. in editor TTL=0.25)
-local _trackedListPool = {}
-local _trackedListPoolN = 0
-
-local function _PoolPopList()
-  if _trackedListPoolN > 0 then
-    local lst = _trackedListPool[_trackedListPoolN]
-    _trackedListPool[_trackedListPoolN] = nil
-    _trackedListPoolN = _trackedListPoolN - 1
-    return lst
-  end
-  return {}
-end
-
-local function _PoolPushList(lst)
-  if not lst then
-    return
-  end
-  local j
-  for j in pairs(lst) do
-    lst[j] = nil
-  end
-  _trackedListPoolN = _trackedListPoolN + 1
-  _trackedListPool[_trackedListPoolN] = lst
-end
-
-local function _GetTrackedByName()
-  local now = GetTime()
-
-  -- While editing, rebuild more aggressively.
-  local ttl = _IsAnyKeyUnderEdit() and 0.25 or 5.0
-
-  local dbSize = 0
-  if DoiteAurasDB and DoiteAurasDB.spells then
-    for _ in pairs(DoiteAurasDB.spells) do
-      dbSize = dbSize + 1
-    end
-  end
-
-  local builtAt = _trackedBuiltAt or 0
-  local cachedSize = _trackedByName and _trackedByName._dbSize or nil
-
-  if _trackedByName and (now - builtAt) < ttl and cachedSize == dbSize then
-    return _trackedByName
-  end
-
-  local t = _trackedByName
-  if not t then
-    t = {}
-  else
-    local k, lst
-    for k, lst in pairs(t) do
-      if type(lst) == "table" then
-        _PoolPushList(lst)
-      end
-      t[k] = nil
-    end
-  end
-
-  if DoiteAurasDB and DoiteAurasDB.spells then
-    local key, data
-    for key, data in pairs(DoiteAurasDB.spells) do
-      if data and (data.type == "Buff" or data.type == "Debuff") then
-        -- If this aura was added via spellid with a temporary "Spell ID: ###" name, resolve it once here using Nampower.
-        _MaybeResolveSpellIdForEntry(key, data)
-
-        local nm = data.displayName or data.name
-        if nm and nm ~= "" then
-          local lst = t[nm]
-          if not lst then
-            lst = _PoolPopList()
-            t[nm] = lst
-          end
-          table.insert(lst, key)
-        end
-      end
-    end
-  end
-
-  _trackedByName, _trackedBuiltAt = t, now
-  t._dbSize = dbSize
-  return t
-end
-
 -- === Aura snapshot & single tooltip ===
 local DoiteConditionsTooltip = _G["DoiteConditionsTooltip"]
 if not DoiteConditionsTooltip then
@@ -459,13 +372,6 @@ end
 
 -- Cache Left1 FS once for aura-name/time reads
 local _DoiteCondTipLeft1FS = _G["DoiteConditionsTooltipTextLeft1"]
-
-local auraSnapshot = {
-  -- TODO improve
-  target = { buffs = {}, debuffs = {}, buffIds = {}, debuffIds = {} },
-}
-
-_G.DoiteConditions_AuraSnapshot = auraSnapshot
 
 -- Create hidden tooltip once; don't re-SetOwner every scan
 local function _EnsureTooltip()
@@ -547,258 +453,9 @@ local function _GetAuraName(unit, index, isDebuff)
   return name
 end
 
--- Tooltip-only fallback used by _ScanUnitAuras() - already have tex/auraId.
-local _DoiteCondTipLeft1FS = nil
-local function _GetAuraName_TooltipOnly(unit, index, isDebuff)
-  if not unit or not index or index < 1 then
-    return ""
-  end
-
-  _EnsureTooltip()
-  DoiteConditionsTooltip:ClearLines()
-
-  if isDebuff then
-    if DoiteConditionsTooltip.SetUnitDebuff then
-      DoiteConditionsTooltip:SetUnitDebuff(unit, index)
-    elseif DoiteConditionsTooltip.SetUnitBuff then
-      DoiteConditionsTooltip:SetUnitBuff(unit, index, "HARMFUL")
-    end
-  else
-    if DoiteConditionsTooltip.SetUnitBuff then
-      DoiteConditionsTooltip:SetUnitBuff(unit, index, "HELPFUL")
-    end
-  end
-
-  if not _DoiteCondTipLeft1FS then
-    _DoiteCondTipLeft1FS = _G["DoiteConditionsTooltipTextLeft1"]
-  end
-
-  local fs = _DoiteCondTipLeft1FS
-  if fs and fs.GetText then
-    local t = fs:GetText()
-    if t and t ~= "" then
-      return t
-    end
-  end
-
-  -- Non-nil sentinel (matches _GetAuraName() behavior for “couldn’t resolve name”)
-  return ""
-end
-
-local function _ScanTargetUnitAuras()
-  local unit = "target"
-
-  -- Use cached lookup: auraName -> { list of keys that track this name }
-  local trackedByName = _GetTrackedByName()
-
-  local snap = auraSnapshot[unit]
-  if not snap then
-    return
-  end
-
-  local prevBuffs, prevDebuffs = snap.buffCount or 0, snap.debuffCount or 0
-
-  -- UnitBuff/UnitDebuff: grabbing only first return (texture) is intentional here.
-  local curBuffTex = UnitBuff(unit, 1)
-  local curDebuffTex = UnitDebuff(unit, 1)
-
-  -- If previously there were no auras and there still are none, skip the scan.
-  if (not curBuffTex and prevBuffs == 0) and (not curDebuffTex and prevDebuffs == 0) then
-    return
-  end
-
-  local buffs, debuffs = snap.buffs, snap.debuffs
-  local buffIds, debuffIds = snap.buffIds, snap.debuffIds
-  if not buffs or not debuffs then
-    return
-  end
-
-
-  -- Track how many slots are actually occupied
-  local buffCount = 0
-  local debuffCount = 0
-
-  -- Clear previous snapshot
-  for k in pairs(buffs) do
-    buffs[k] = nil
-  end
-  for k in pairs(debuffs) do
-    debuffs[k] = nil
-  end
-  if buffIds then
-    for k in pairs(buffIds) do
-      buffIds[k] = nil
-    end
-  end
-  if debuffIds then
-    for k in pairs(debuffIds) do
-      debuffIds[k] = nil
-    end
-  end
-
-  local cache = IconCache
-
-  ----------------------------------------------------------------
-  -- BUFFS
-  ----------------------------------------------------------------
-  local i = 1
-  while true do
-    -- Nampower: texture, stacks, spellID
-    local tex, _, auraId = UnitBuff(unit, i)
-    if not tex then
-      break
-    end
-    buffCount = buffCount + 1
-
-    -- Resolve name once: Nampower id->name fast path, tooltip-only fallback if needed
-    local name = nil
-    if auraId then
-      name = _NP_SpellNameAndTexture(auraId)
-    end
-
-    if (not name) or name == "" then
-      local n2 = _GetAuraName_TooltipOnly(unit, i, false)
-      if n2 and n2 ~= "" then
-        name = n2
-      end
-    end
-
-    if name and name ~= "" then
-      buffs[name] = true
-      if buffIds and auraId then
-        buffIds[auraId] = true
-      end
-
-      local list = trackedByName and trackedByName[name]
-      if list and type(list) == "table" then
-        -- Cache sync (but never gate live updates on cache)
-        if tex and cache[name] ~= tex then
-          cache[name] = tex
-          if DoiteAurasDB and DoiteAurasDB.cache then
-            DoiteAurasDB.cache[name] = tex
-          end
-        end
-
-        local count = table.getn(list)
-        local auraIdStr = nil
-        for j = 1, count do
-          local key = list[j]
-
-          -- 1) Update DB icon always
-          if key and DoiteAurasDB and DoiteAurasDB.spells then
-            local s = DoiteAurasDB.spells[key]
-            if s then
-              if tex and tex ~= "" then
-                s.iconTexture = tex
-              end
-              if auraId and (not s.spellid or s.spellid == "") then
-                if not auraIdStr then
-                  auraIdStr = tostring(auraId)
-                end
-                s.spellid = auraIdStr
-              end
-              if (not s.displayName or s.displayName == "") then
-                s.displayName = name
-              end
-            end
-          end
-
-          -- 2) Update live icon frame even if cache already had it
-          local f = _GetIconFrame(key)
-          if f and f.icon and tex and f.icon.GetTexture and f.icon.SetTexture then
-            if f.icon:GetTexture() ~= tex then
-              f.icon:SetTexture(tex)
-            end
-          end
-        end
-      end
-    end
-
-    i = i + 1
-  end
-
-  ----------------------------------------------------------------
-  -- DEBUFFS
-  ----------------------------------------------------------------
-  i = 1
-  while true do
-    -- Nampower: texture, stacks, dtype, spellID
-    local tex, _, _, auraId = UnitDebuff(unit, i)
-    if not tex then
-      break
-    end
-
-    debuffCount = debuffCount + 1
-
-    local name = nil
-    if auraId then
-      name = _NP_SpellNameAndTexture(auraId)
-    end
-
-    if (not name) or name == "" then
-      local n2 = _GetAuraName_TooltipOnly(unit, i, true)
-      if n2 ~= nil and n2 ~= "" then
-        name = n2
-      end
-    end
-
-    if type(name) == "string" and name ~= "" then
-      debuffs[name] = true
-      if debuffIds and auraId then
-        debuffIds[auraId] = true
-      end
-
-      local list = trackedByName and trackedByName[name]
-      if list and type(list) == "table" then
-        if tex and cache[name] ~= tex then
-          cache[name] = tex
-          DoiteAurasDB.cache[name] = tex
-        end
-
-        local count = table.getn(list)
-        local auraIdStr = nil
-        for j = 1, count do
-          local key = list[j]
-          if key and DoiteAurasDB.spells then
-            local s = DoiteAurasDB.spells[key]
-            if s then
-              if tex and tex ~= "" then
-                s.iconTexture = tex
-              end
-              if auraId and (not s.spellid or s.spellid == "") then
-                if not auraIdStr then
-                  auraIdStr = tostring(auraId)
-                end
-                s.spellid = auraIdStr
-              end
-              if (not s.displayName or s.displayName == "") then
-                s.displayName = name
-              end
-            end
-          end
-
-          local f = _GetIconFrame(key)
-          if f and f.icon and tex and f.icon:GetTexture() ~= tex then
-            f.icon:SetTexture(tex)
-          end
-        end
-      end
-    end
-
-    i = i + 1
-  end
-
-  -- Remember how many buff/debuff slots were actually used
-  snap.buffCount = buffCount
-  snap.debuffCount = debuffCount
-end
-
 ---------------------------------------------------------------
 -- Local helpers
 ---------------------------------------------------------------
-
--- Global alias so update loop can call it without capturing the loc
-_G.DoiteConditions_ScanUnitAuras = _ScanTargetUnitAuras
 
 local function InCombat()
   return UnitAffectingCombat("player") == 1
@@ -2440,55 +2097,21 @@ local function _DoiteTrackRemainingPass(spellName, unit, comp, threshold)
   return nil
 end
 
--- For debuff checks only: if all debuff slots are full and the name exists in buffs, treat it as a debuff hit
+-- Target aura checks use DoiteTargetAuras (includes buff-cap overflow handling).
 local function _TargetHasOverflowDebuff(auraName)
-  if not auraName then
-    return false
-  end
-
-  local snap = auraSnapshot["target"]
-  if not snap then
-    return false
-  end
-
-  local debuffs = snap.debuffs
-  if debuffs and debuffs[auraName] == true then
-    return true
-  end
-
-  local count = snap.debuffCount or 0
-  if count < 16 then
-    -- Debuff bar not "full", so don't risk treating a real buff as debuff.
-    return false
-  end
-
-  local buffs = snap.buffs
-  if buffs and buffs[auraName] == true then
-    return true
-  end
-
-  return false
+  return DoiteTargetAuras.HasDebuff(auraName)
 end
 
 local function _TargetHasAura(auraName, wantDebuff)
-  local unit = "target"
-
-  if not unit or not auraName or not UnitExists(unit) then
-    return false
-  end
-
-  local snap = auraSnapshot[unit]
-  if not snap then
+  if not auraName or not UnitExists("target") then
     return false
   end
 
   if wantDebuff then
-    -- Debuff checks: first real debuffs, then overflow in buffs.
-    return _TargetHasOverflowDebuff(auraName)
-  else
-    local b = snap.buffs
-    return b and b[auraName] == true
+    return DoiteTargetAuras.HasDebuff(auraName)
   end
+
+  return DoiteTargetAuras.HasBuff(auraName)
 end
 
 -- Talent helpers for auraConditions (Known / Not known)
@@ -2779,22 +2402,27 @@ _StacksPasses = function(cnt, comp, target)
   return true
 end
 
--- Get stack count for a named aura on target (or player). Uses DoitePlayerAuras for player checks.
+-- Get stack count for a named aura on target (or player).
 _GetAuraStacksOnUnit = function(unit, auraName, wantDebuff)
   if not unit or not auraName then
     return nil
   end
 
-  -- Use DoitePlayerAuras for player checks
   if unit == "player" then
     if wantDebuff then
       return DoitePlayerAuras.GetDebuffStacks(auraName)
     else
       return DoitePlayerAuras.GetBuffStacks(auraName)
     end
+  elseif unit == "target" then
+    if wantDebuff then
+      return DoiteTargetAuras.GetDebuffStacks(auraName)
+    else
+      return DoiteTargetAuras.GetBuffStacks(auraName)
+    end
   end
 
-  -- TODO improve logic for other units
+  -- fallback logic for units other than player/current target
   ----------------------------------------------------------------
   -- Primary scan: normal BUFF / DEBUFF list for non-player units
   ----------------------------------------------------------------
@@ -2825,70 +2453,20 @@ _GetAuraStacksOnUnit = function(unit, auraName, wantDebuff)
   end
 
 
-  -- If debuff bar is "full" (>=16) and the aura name is present in the BUFF snapshot, treat it as an overflowed debuff and read stacks from UnitBuff.
-  if wantDebuff then
-    local snap = auraSnapshot[unit]
-    if snap then
-      local debCount = snap.debuffCount or 0
-      local buffs = snap.buffs
-
-      if debCount >= 16 and buffs and buffs[auraName] then
-        -- First try a nampower-based pass (mirrors main loop)
-        local j = 1
-        while j <= 32 do
-          local tex2, applications2, auraId2 = UnitBuff(unit, j)
-          if not tex2 then
-            break
-          end
-
-          local name2
-          if auraId2 then
-            name2 = _NP_SpellNameAndTexture(auraId2)
-          end
-
-          if name2 == auraName then
-            return applications2 or 1
-          end
-
-          j = j + 1
-        end
-
-        -- Fallback: tooltip-based name resolution via _GetAuraName, then a second UnitBuff call to read stacks.
-        j = 1
-        while j <= 32 do
-          local n = _GetAuraName(unit, j, false)
-          if n == nil then
-            break
-          end
-          if n ~= "" and n == auraName then
-            local _, applications3 = UnitBuff(unit, j)
-            return applications3 or 1
-          end
-          j = j + 1
-        end
-      end
-    end
-  end
-
+  -- Overflow debuff handling for target is provided by DoiteTargetAuras,
+  -- and non-target units fall back to direct API scanning only.
   return nil
 end
 
 -- Fast check: does unit have ANY of the named buffs?
 local function _TargetHasAnyBuffName(names)
-  local unit = "target"
-  if not unit or not names then
-    return false
-  end
-
-  local snap = auraSnapshot[unit]
-  local b = snap and snap.buffs
-  if not b then
+  if not names or not UnitExists("target") then
     return false
   end
 
   local n = table.getn(names)
   for i = 1, n do
-    if b[names[i]] then
+    if DoiteTargetAuras.HasBuff(names[i]) then
       return true
     end
   end
@@ -4348,39 +3926,7 @@ local _hasAnyTargetAuraUsage = true
 -- Stored as DoiteConditions methods to avoid adding more file-scope locals.
 -- ------------------------------------------------------------
 
-function DoiteConditions:_ClearTargetAuraSnapshot()
-  local s = auraSnapshot and auraSnapshot.target
-  if s then
-    local b, d = s.buffs, s.debuffs
-    if b then
-      for k in pairs(b) do
-        b[k] = nil
-      end
-    end
-    if d then
-      for k in pairs(d) do
-        d[k] = nil
-      end
-    end
-  end
-end
-
--- _RebuildPlayerAuraTimers removed - now using DoitePlayerAuras for on-demand time calculation
-
-function DoiteConditions:ProcessPendingAuraScans()
-  -- Player aura scanning removed - now handled by DoitePlayerAuras event-driven tracking
-
-  -- Target: scan if (and only if) target aura tracking is in use; else keep snapshot empty.
-  if self._pendingAuraScanTarget then
-    self._pendingAuraScanTarget = false
-
-    if _hasAnyTargetAuraUsage and UnitExists and UnitExists("target") then
-      _ScanTargetUnitAuras()
-    else
-      self:_ClearTargetAuraSnapshot()
-    end
-  end
-end
+-- _RebuildTargetAuraTimers removed - target aura state is handled by DoiteTargetAuras.
 
 -- Target facts cache
 local _DA_TargetFacts = { exists = false, isSelf = false, isFriend = false, canAttack = false }
@@ -5493,41 +5039,31 @@ local function CheckAuraConditions(data)
 
   -- Target (help) — requires friendly target (already gated above)
   if (not found) and allowHelp then
-    local s = auraSnapshot.target
-    if s then
-      local hit = false
+    local hit = false
 
-      -- Buff-type icons: unchanged.
-      if wantBuff and s.buffs[name] then
-        hit = true
-        -- Debuff-type icons: overflow-aware.
-      elseif wantDebuff and _TargetHasOverflowDebuff(name) then
-        hit = true
-      end
+    if wantBuff and DoiteTargetAuras.HasBuff(name) then
+      hit = true
+    elseif wantDebuff and _TargetHasOverflowDebuff(name) then
+      hit = true
+    end
 
-      if hit then
-        found = true
-      end
+    if hit then
+      found = true
     end
   end
 
   -- Target (harm) — requires hostile target (already gated above)
   if (not found) and allowHarm then
-    local s = auraSnapshot.target
-    if s then
-      local hit = false
+    local hit = false
 
-      -- Buff-type icons: unchanged.
-      if wantBuff and s.buffs[name] then
-        hit = true
-        -- Debuff-type icons: overflow-aware.
-      elseif wantDebuff and _TargetHasOverflowDebuff(name) then
-        hit = true
-      end
+    if wantBuff and DoiteTargetAuras.HasBuff(name) then
+      hit = true
+    elseif wantDebuff and _TargetHasOverflowDebuff(name) then
+      hit = true
+    end
 
-      if hit then
-        found = true
-      end
+    if hit then
+      found = true
     end
   end
 
@@ -7078,9 +6614,6 @@ function DoiteConditions_OnUpdate(dt)
   -- Keep warrior Overpower/Revenge procs in sync even if no other events fire
   DoiteConditions_WarriorProcTick()
 
-  -- Coalesce aura events: scan/rebuild at most once per frame, before any rendering/eval.
-  DoiteConditions:ProcessPendingAuraScans()
-
   -- Smooth remaining-time text (abilities/items/auras) on a cheap path
   if _textAccum >= 0.1 then
     _textAccum = 0
@@ -7149,10 +6682,7 @@ end
 
 _tick:SetScript("OnUpdate", _DoiteConditions_OnUpdateWrapper)
 
--- Prime aura snapshot and trigger initial evaluation
-if _G.UnitExists and _G.UnitExists("target") then
-  DoiteConditions_ScanUnitAuras("target")
-end
+-- Prime evaluation flags
 dirty_ability, dirty_aura, dirty_target, dirty_power = true, true, true, true
 
 ---------------------------------------------------------------
@@ -7181,10 +6711,7 @@ eventFrame:RegisterEvent("RAID_ROSTER_UPDATE")
 
 eventFrame:SetScript("OnEvent", function()
   if event == "PLAYER_ENTERING_WORLD" then
-    -- Initial aura scan
-    if _G.UnitExists and _G.UnitExists("target") then
-      DoiteConditions_ScanUnitAuras("target")
-    end
+    -- Target aura cache is maintained by DoiteTargetAuras module.
     dirty_ability, dirty_aura, dirty_target, dirty_power = true, true, true, true
 
     -- Cache player class for lightweight warrior-specific logic + range overrides
@@ -7214,15 +6741,6 @@ eventFrame:SetScript("OnEvent", function()
     if arg1 == "player" then
       dirty_aura = true
       dirty_ability = true
-
-    elseif arg1 == "target" then
-      -- Only bother if *any* config ever looks at target auras.
-      if _hasAnyTargetAuraUsage then
-        -- Coalesce scan/clear into OnUpdate (once per frame)
-        DoiteConditions._pendingAuraScanTarget = true
-        dirty_aura = true
-        dirty_ability = true
-      end
     end
 
   elseif event == "SPELLS_CHANGED" then
@@ -7235,22 +6753,6 @@ eventFrame:SetScript("OnEvent", function()
     dirty_ability = true
 
   elseif event == "PLAYER_TARGET_CHANGED" then
-    -- If target aura tracking is used anywhere, scan/clear once in OnUpdate. Otherwise, keep snapshot empty so no stale target aura data can ever match.
-    if _hasAnyTargetAuraUsage then
-      DoiteConditions._pendingAuraScanTarget = true
-    else
-      local snap = _G.DoiteConditions_AuraSnapshot
-      local s = snap and snap.target
-      if s then
-        for k in pairs(s.buffs) do
-          s.buffs[k] = nil
-        end
-        for k in pairs(s.debuffs) do
-          s.debuffs[k] = nil
-        end
-      end
-    end
-
     dirty_target, dirty_aura = true, true
     dirty_ability = true
 
