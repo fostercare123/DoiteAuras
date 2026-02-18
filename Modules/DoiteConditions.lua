@@ -2342,12 +2342,21 @@ local function _GetBaseXY(key, dataTbl)
 end
 
 -- Player-only aura remaining (seconds); nil if not timed / not found.
-local function _TargetAuraRemainingSeconds(auraName)
+local function _PlayerAuraRemainingSeconds(auraName)
   if not auraName then
     return nil
   end
 
-  local remaining = DoiteTargetAuras.GetHiddenBuffRemaining(auraName)
+  local playerAuraSlot = DoitePlayerAuras.GetActiveAuraSlot(auraName)
+  if playerAuraSlot then
+    local _, remainingMs, _ = GetPlayerAuraDuration(playerAuraSlot)
+    if remainingMs and remainingMs > 0 then
+      return remainingMs / 1000
+    end
+  end
+
+  -- get remaining for buff cap spells
+  local remaining = DoitePlayerAuras.GetHiddenBuffRemaining(auraName)
   if remaining and remaining > 0 then
     return remaining
   end
@@ -2431,21 +2440,55 @@ local function _DoiteTrackRemainingPass(spellName, unit, comp, threshold)
   return nil
 end
 
--- Target aura checks use DoiteTargetAuras (includes buff-cap overflow handling).
+-- For debuff checks only: if all debuff slots are full and the name exists in buffs, treat it as a debuff hit
 local function _TargetHasOverflowDebuff(auraName)
-  return DoiteTargetAuras.HasDebuff(auraName)
+  if not auraName then
+    return false
+  end
+
+  local snap = auraSnapshot["target"]
+  if not snap then
+    return false
+  end
+
+  local debuffs = snap.debuffs
+  if debuffs and debuffs[auraName] == true then
+    return true
+  end
+
+  local count = snap.debuffCount or 0
+  if count < 16 then
+    -- Debuff bar not "full", so don't risk treating a real buff as debuff.
+    return false
+  end
+
+  local buffs = snap.buffs
+  if buffs and buffs[auraName] == true then
+    return true
+  end
+
+  return false
 end
 
 local function _TargetHasAura(auraName, wantDebuff)
-  if not auraName or not UnitExists("target") then
+  local unit = "target"
+
+  if not unit or not auraName or not UnitExists(unit) then
+    return false
+  end
+
+  local snap = auraSnapshot[unit]
+  if not snap then
     return false
   end
 
   if wantDebuff then
-    return DoiteTargetAuras.HasDebuff(auraName)
+    -- Debuff checks: first real debuffs, then overflow in buffs.
+    return _TargetHasOverflowDebuff(auraName)
+  else
+    local b = snap.buffs
+    return b and b[auraName] == true
   end
-
-  return DoiteTargetAuras.HasBuff(auraName)
 end
 
 -- Talent helpers for auraConditions (Known / Not known)
@@ -2595,18 +2638,14 @@ local function _AuraConditions_CheckEntry(entry)
   ----------------------------------------------------------------
   local wantDebuff = (entry.buffType == "DEBUFF")
 
-  local unit = entry.unit or "target"
+  local unit = entry.unit or "player"
   if unit ~= "player" and unit ~= "target" then
-    unit = "target"
+    unit = "player"
   end
 
-  if not UnitExists("target") then
+  -- If explicitly target "target" but have no target, do not pass
+  if unit == "target" and (not UnitExists("target")) then
     return false
-  end
-
-  -- shift legacy player aura unit checks onto target auras
-  if unit == "player" then
-    unit = "target"
   end
 
   ----------------------------------------------------------------
@@ -2650,7 +2689,16 @@ local function _AuraConditions_CheckEntry(entry)
   ----------------------------------------------------------------
   local hasAura = false
 
-  hasAura = _TargetHasAura(name, wantDebuff)
+  if unit == "player" then
+    if (not wantDebuff) and DoitePlayerAuras.HasBuff(name) then
+      hasAura = true
+    elseif wantDebuff and DoitePlayerAuras.HasDebuff(name) then
+      hasAura = true
+    end
+  else
+    -- unit == "target"
+    hasAura = _TargetHasAura(name, wantDebuff)
+  end
 
   ----------------------------------------------------------------
   -- If stacks enabled and aura exists, compute stacks and compare.
@@ -2731,27 +2779,22 @@ _StacksPasses = function(cnt, comp, target)
   return true
 end
 
--- Get stack count for a named aura on a unit. Uses DoiteTargetAuras for target checks.
+-- Get stack count for a named aura on target (or player). Uses DoitePlayerAuras for player checks.
 _GetAuraStacksOnUnit = function(unit, auraName, wantDebuff)
   if not unit or not auraName then
     return nil
   end
 
-  if unit == "target" then
+  -- Use DoitePlayerAuras for player checks
+  if unit == "player" then
     if wantDebuff then
-      return DoiteTargetAuras.GetDebuffStacks(auraName)
+      return DoitePlayerAuras.GetDebuffStacks(auraName)
     else
-      return DoiteTargetAuras.GetBuffStacks(auraName)
-    end
-  elseif unit == "target" then
-    if wantDebuff then
-      return DoiteTargetAuras.GetDebuffStacks(auraName)
-    else
-      return DoiteTargetAuras.GetBuffStacks(auraName)
+      return DoitePlayerAuras.GetBuffStacks(auraName)
     end
   end
 
-  -- fallback logic for units other than current target
+  -- TODO improve logic for other units
   ----------------------------------------------------------------
   -- Primary scan: normal BUFF / DEBUFF list for non-player units
   ----------------------------------------------------------------
@@ -2832,13 +2875,20 @@ end
 
 -- Fast check: does unit have ANY of the named buffs?
 local function _TargetHasAnyBuffName(names)
-  if not names or not UnitExists("target") then
+  local unit = "target"
+  if not unit or not names then
+    return false
+  end
+
+  local snap = auraSnapshot[unit]
+  local b = snap and snap.buffs
+  if not b then
     return false
   end
 
   local n = table.getn(names)
   for i = 1, n do
-    if DoiteTargetAuras.HasBuff(names[i]) then
+    if b[names[i]] then
       return true
     end
   end
@@ -4315,15 +4365,20 @@ function DoiteConditions:_ClearTargetAuraSnapshot()
   end
 end
 
--- _RebuildTargetAuraTimers removed - now using DoiteTargetAuras for on-demand time calculation
+-- _RebuildPlayerAuraTimers removed - now using DoitePlayerAuras for on-demand time calculation
 
 function DoiteConditions:ProcessPendingAuraScans()
-  -- Target aura scanning removed - now handled by DoiteTargetAuras event-driven tracking
+  -- Player aura scanning removed - now handled by DoitePlayerAuras event-driven tracking
 
   -- Target: scan if (and only if) target aura tracking is in use; else keep snapshot empty.
   if self._pendingAuraScanTarget then
     self._pendingAuraScanTarget = false
-    self:_ClearTargetAuraSnapshot()
+
+    if _hasAnyTargetAuraUsage and UnitExists and UnitExists("target") then
+      _ScanTargetUnitAuras()
+    else
+      self:_ClearTargetAuraSnapshot()
+    end
   end
 end
 
@@ -5419,16 +5474,16 @@ local function CheckAuraConditions(data)
 
   local found = false
 
-  -- Self auras now evaluate against current target auras
+  -- Self auras — aura on player, regardless of target
   if (not found) and allowSelf then
     local hit = false
 
     if wantBuff then
-      hit = DoiteTargetAuras.HasBuff(name)
+      hit = DoitePlayerAuras.HasBuff(name)
     end
 
     if (not hit) and wantDebuff then
-      hit = DoiteTargetAuras.HasDebuff(name)
+      hit = DoitePlayerAuras.HasDebuff(name)
     end
 
     if hit then
@@ -5438,31 +5493,41 @@ local function CheckAuraConditions(data)
 
   -- Target (help) — requires friendly target (already gated above)
   if (not found) and allowHelp then
-    local hit = false
+    local s = auraSnapshot.target
+    if s then
+      local hit = false
 
-    if wantBuff and DoiteTargetAuras.HasBuff(name) then
-      hit = true
-    elseif wantDebuff and _TargetHasOverflowDebuff(name) then
-      hit = true
-    end
+      -- Buff-type icons: unchanged.
+      if wantBuff and s.buffs[name] then
+        hit = true
+        -- Debuff-type icons: overflow-aware.
+      elseif wantDebuff and _TargetHasOverflowDebuff(name) then
+        hit = true
+      end
 
-    if hit then
-      found = true
+      if hit then
+        found = true
+      end
     end
   end
 
   -- Target (harm) — requires hostile target (already gated above)
   if (not found) and allowHarm then
-    local hit = false
+    local s = auraSnapshot.target
+    if s then
+      local hit = false
 
-    if wantBuff and DoiteTargetAuras.HasBuff(name) then
-      hit = true
-    elseif wantDebuff and _TargetHasOverflowDebuff(name) then
-      hit = true
-    end
+      -- Buff-type icons: unchanged.
+      if wantBuff and s.buffs[name] then
+        hit = true
+        -- Debuff-type icons: overflow-aware.
+      elseif wantDebuff and _TargetHasOverflowDebuff(name) then
+        hit = true
+      end
 
-    if hit then
-      found = true
+      if hit then
+        found = true
+      end
     end
   end
 
@@ -5471,7 +5536,7 @@ local function CheckAuraConditions(data)
     local ownerUnit = nil
 
     if allowSelf then
-      ownerUnit = "target"
+      ownerUnit = "player"
     elseif (allowHelp or allowHarm) and UnitExists("target") then
       ownerUnit = "target"
     end
@@ -5650,7 +5715,7 @@ local function CheckAuraConditions(data)
 
         if targetSelf then
           -- PLAYER/SELF remaining time must reflect the actual visible aura time (vanilla API)
-          local rem = _TargetAuraRemainingSeconds(name)
+          local rem = _PlayerAuraRemainingSeconds(name)
 
           if rem and rem > 0 then
             pass = _RemainingPasses(rem, comp, threshold)
@@ -6056,7 +6121,7 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
 
         if targetSelf then
           -- PLAYER/SELF remaining-time text must reflect the actual visible aura time (vanilla/tooltip scan), never DoiteTrack. Ownership filtering (onlyMine/onlyOthers) belongs in the condition logic.
-          remAura = _TargetAuraRemainingSeconds(auraName)
+          remAura = _PlayerAuraRemainingSeconds(auraName)
         else
           -- Target remaining time relies on DoiteTrack (vanilla target auras don't expose durations).
           remAura = _DoiteTrackAuraRemainingSeconds(auraName, "target")
@@ -7084,7 +7149,10 @@ end
 
 _tick:SetScript("OnUpdate", _DoiteConditions_OnUpdateWrapper)
 
--- Prime evaluation flags
+-- Prime aura snapshot and trigger initial evaluation
+if _G.UnitExists and _G.UnitExists("target") then
+  DoiteConditions_ScanUnitAuras("target")
+end
 dirty_ability, dirty_aura, dirty_target, dirty_power = true, true, true, true
 
 ---------------------------------------------------------------
@@ -7113,7 +7181,10 @@ eventFrame:RegisterEvent("RAID_ROSTER_UPDATE")
 
 eventFrame:SetScript("OnEvent", function()
   if event == "PLAYER_ENTERING_WORLD" then
-    -- Target aura cache is maintained by DoiteTargetAuras module.
+    -- Initial aura scan
+    if _G.UnitExists and _G.UnitExists("target") then
+      DoiteConditions_ScanUnitAuras("target")
+    end
     dirty_ability, dirty_aura, dirty_target, dirty_power = true, true, true, true
 
     -- Cache player class for lightweight warrior-specific logic + range overrides
@@ -7143,6 +7214,15 @@ eventFrame:SetScript("OnEvent", function()
     if arg1 == "player" then
       dirty_aura = true
       dirty_ability = true
+
+    elseif arg1 == "target" then
+      -- Only bother if *any* config ever looks at target auras.
+      if _hasAnyTargetAuraUsage then
+        -- Coalesce scan/clear into OnUpdate (once per frame)
+        DoiteConditions._pendingAuraScanTarget = true
+        dirty_aura = true
+        dirty_ability = true
+      end
     end
 
   elseif event == "SPELLS_CHANGED" then
@@ -7155,7 +7235,22 @@ eventFrame:SetScript("OnEvent", function()
     dirty_ability = true
 
   elseif event == "PLAYER_TARGET_CHANGED" then
-    DoiteConditions._pendingAuraScanTarget = true
+    -- If target aura tracking is used anywhere, scan/clear once in OnUpdate. Otherwise, keep snapshot empty so no stale target aura data can ever match.
+    if _hasAnyTargetAuraUsage then
+      DoiteConditions._pendingAuraScanTarget = true
+    else
+      local snap = _G.DoiteConditions_AuraSnapshot
+      local s = snap and snap.target
+      if s then
+        for k in pairs(s.buffs) do
+          s.buffs[k] = nil
+        end
+        for k in pairs(s.debuffs) do
+          s.debuffs[k] = nil
+        end
+      end
+    end
+
     dirty_target, dirty_aura = true, true
     dirty_ability = true
 
