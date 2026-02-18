@@ -444,6 +444,39 @@ local function _GetUnitAuraTable(unit, isDebuff)
   end
 end
 
+local function _GetSpellNameByIdCached(spellId)
+  if not spellId or spellId <= 0 then
+    return nil
+  end
+
+  local cache = _G["DoiteTrack_SpellNameByIdCache"]
+  if not cache then
+    cache = {}
+    _G["DoiteTrack_SpellNameByIdCache"] = cache
+  end
+
+  local cached = cache[spellId]
+  if cached ~= nil then
+    if cached == false then
+      return nil
+    end
+    return cached
+  end
+
+  local name = nil
+  if GetSpellRecField then
+    name = GetSpellRecField(spellId, "name")
+  end
+
+  if name and name ~= "" then
+    cache[spellId] = name
+    return name
+  end
+
+  cache[spellId] = false
+  return nil
+end
+
 local function _AuraHasSpellId(unit, spellId, isDebuff)
   spellId = tonumber(spellId) or 0
   if not unit or spellId <= 0 then
@@ -455,6 +488,16 @@ local function _AuraHasSpellId(unit, spellId, isDebuff)
       return DoiteTargetAuras.HasDebuffSpellId(spellId)
     end
     return DoiteTargetAuras.HasBuffSpellId(spellId)
+  end
+
+  if unit == "player" and DoitePlayerAuras then
+    local spellName = _GetSpellNameByIdCached(spellId)
+    if spellName then
+      if isDebuff then
+        return DoitePlayerAuras.HasDebuff(spellName)
+      end
+      return DoitePlayerAuras.HasBuff(spellName)
+    end
   end
 
   local auras = _GetUnitAuraTable(unit, isDebuff)

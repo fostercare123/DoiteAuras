@@ -196,6 +196,15 @@ _DoiteImmediateEval:SetScript("OnUpdate", function()
 
   if DoiteConditions and DoiteConditions.EvaluateAll then
     DoiteConditions:EvaluateAll()
+
+    -- Avoid a second full pass in the normal OnUpdate loop right after
+    -- this immediate evaluation. Target aura updates already arrive through
+    -- DoiteTargetAuras and are handled here, so keep the dirty state clean.
+    dirty_ability = false
+    dirty_aura = false
+    dirty_target = false
+    dirty_power = false
+    dirty_ability_time = false
   end
 
   if DoiteGroup then
