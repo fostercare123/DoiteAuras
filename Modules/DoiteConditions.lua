@@ -1330,22 +1330,20 @@ local function _EvaluateItemCoreState(data, c)
       state.rem = rem
       state.dur = dur
 
-	  if mode == "oncd" then
-	    state.modeMatches = (hasItem and onCd)
-	  elseif mode == "notcd" then
-	    state.modeMatches = (hasItem and (not onCd))
-	  elseif mode == "both" then
-	    state.modeMatches = hasItem
-	  else
-	    state.modeMatches = true
-	  end
+      if mode == "oncd" then
+        state.modeMatches = (hasItem and onCd)
+      elseif mode == "notcd" then
+        state.modeMatches = (hasItem and (not onCd))
+      else
+        state.modeMatches = true
+      end
 
       ----------------------------------------------------------------
       -- Temp enchant tracking (Nampower GetEquippedItem) for weapon-slot synthetic entries
       -- Guarded by displayName == "---EQUIPPED WEAPON SLOTS---"
       --
       -- Special cases:
-      --  * mode == "notcd"/"both" + textTimeRemaining => show temp enchant remaining time
+      --  * mode == "notcd" + textTimeRemaining => show temp enchant remaining time
       --  * textStackCounter / stacksEnabled    => use temp enchant charges as "count"
       --
       -- Cache persists across weapon swaps so countdown continues even
@@ -1355,7 +1353,7 @@ local function _EvaluateItemCoreState(data, c)
           and data.displayName == "---EQUIPPED WEAPON SLOTS---" then
 
         local needTE = false
-        if ((mode == "notcd" or mode == "both")
+        if (mode == "notcd"
               and (c.textTimeRemaining == true or c.remainingEnabled == true or c.enchant ~= nil))
             or (c.textStackCounter == true)
             or (c.stacksEnabled == true) then
@@ -1503,14 +1501,6 @@ local function _EvaluateItemCoreState(data, c)
           state.teCharges = slotC.charges or 0
           state.teItemId = slotC.itemId
           state.teEnchantId = slotC.tempEnchantId
-
-          -- When weapon slots are in notcd/both, "time remaining" refers to temp enchant uptime
-          if (mode == "notcd" or mode == "both") then
-            if c and (c.textTimeRemaining == true or c.remainingEnabled == true) then
-              state.rem = remSec or 0
-              state.dur = 0
-            end
-          end
         end
       end
 
@@ -1593,75 +1583,6 @@ local function _EvaluateItemCoreState(data, c)
             end
           end
 
-		elseif mode == "both" then
-		  -- Show whenever any usable trinket exists.
-		  state.modeMatches = (use1 or use2)
-
-		  -- Prefer to display an on-cooldown trinket if any are on cooldown (like oncd),
-		  -- otherwise fall back to the notcd "first ready" semantics.
-		  local found, bestRem, bestDur = false, nil, nil
-
-		  if use1 and on1 then
-			found = true
-			bestRem = rem1
-			bestDur = dur1
-			winner = INV_SLOT_TRINKET1
-		  end
-		  if use2 and on2 then
-			if (not found) or (rem2 < bestRem) then
-			  found = true
-			  bestRem = rem2
-			  bestDur = dur2
-			  winner = INV_SLOT_TRINKET2
-			end
-		  end
-
-		  if found then
-			state.rem = bestRem
-			state.dur = bestDur
-		  else
-			-- None on cooldown => use the existing "first ready" memory logic from notcd
-			local function slotReady(useFlag, onCdFlag)
-			  return useFlag and (not onCdFlag)
-			end
-
-			-- Drop previous winner if it stopped being ready/usable.
-			if winner == INV_SLOT_TRINKET1 and not slotReady(use1, on1) then
-			  winner = nil
-			elseif winner == INV_SLOT_TRINKET2 and not slotReady(use2, on2) then
-			  winner = nil
-			end
-
-			if not winner then
-			  if slotReady(use1, on1) then
-				winner = INV_SLOT_TRINKET1
-			  elseif slotReady(use2, on2) then
-				winner = INV_SLOT_TRINKET2
-			  end
-			end
-
-			if winner == INV_SLOT_TRINKET1 then
-			  state.rem = rem1
-			  state.dur = dur1
-			elseif winner == INV_SLOT_TRINKET2 then
-			  state.rem = rem2
-			  state.dur = dur2
-			else
-			  -- still "modeMatches" true if any usable exists; no specific timer
-			  state.rem = 0
-			  state.dur = dur1 or dur2
-			end
-		  end
-
-		  if key then
-			if winner then
-			  _TrinketFirstMemory[key] = _TrinketFirstMemory[key] or {}
-			  _TrinketFirstMemory[key].slot = winner
-			else
-			  _TrinketFirstMemory[key] = nil
-			end
-		  end
-
         elseif mode == "oncd" then
           -- On-CD mode: any usable trinket on cooldown passes; pick the one
           local found, bestRem, bestDur = false, nil, nil
@@ -1692,8 +1613,7 @@ local function _EvaluateItemCoreState(data, c)
             else
               _TrinketFirstMemory[key] = nil
             end
-          end  
-		  
+          end
         else
           -- No explicit mode: just report presence of any usable trinket.
           state.modeMatches = (use1 or use2)
@@ -1718,19 +1638,6 @@ local function _EvaluateItemCoreState(data, c)
             state.rem = (r1 > r2) and r1 or r2
             state.dur = dur1 or dur2
           end
-		  
-		elseif mode == "both" then
-		  -- both => show as long as at least one usable trinket exists
-		  local any = (use1 or use2)
-		  state.modeMatches = any
-		  if any then
-			-- For display: show the max remaining among those on cooldown, else 0.
-			local r1 = (use1 and on1 and rem1) or 0
-			local r2 = (use2 and on2 and rem2) or 0
-			state.rem = (r1 > r2) and r1 or r2
-			state.dur = dur1 or dur2
-		  end
-		  
         elseif mode == "notcd" then
           local ok = true
           if use1 and on1 then
@@ -1758,7 +1665,6 @@ local function _EvaluateItemCoreState(data, c)
       -- Special case: equipped weapon slots can show temp enchant charges
       if (invSlotName == "MAINHAND" or invSlotName == "OFFHAND" or invSlotName == "RANGED")
           and data.displayName == "---EQUIPPED WEAPON SLOTS---"
-		  and (mode == "notcd" or mode == "both")
           and (c.textStackCounter == true or c.stacksEnabled == true) then
 
         local ch = state.teCharges
@@ -1887,15 +1793,13 @@ local function _EvaluateItemCoreState(data, c)
     state.dur = dur
 
     local mode = c.mode or ""
-	if mode == "oncd" then
-	  state.modeMatches = (hasItem and onCd)
-	elseif mode == "notcd" then
-	  state.modeMatches = (hasItem and (not onCd))
-	elseif mode == "both" then
-	  state.modeMatches = hasItem
-	else
-	  state.modeMatches = true
-	end
+    if mode == "oncd" then
+      state.modeMatches = (hasItem and onCd)
+    elseif mode == "notcd" then
+      state.modeMatches = (hasItem and (not onCd))
+    else
+      state.modeMatches = true
+    end
   else
     -- No instance at all (no eqSlot/bagLoc)
     if missing and c.whereMissing then
@@ -2443,11 +2347,11 @@ local function _PlayerAuraRemainingSeconds(auraName)
     return nil
   end
 
-  local playerBuffBarSlot = DoitePlayerAuras.GetBuffBarSlot(auraName)
-  if playerBuffBarSlot then
-    local remaining = GetPlayerBuffTimeLeft(playerBuffBarSlot)
-    if remaining and remaining > 0 then
-      return remaining
+  local playerAuraSlot = DoitePlayerAuras.GetActiveAuraSlot(auraName)
+  if playerAuraSlot then
+    local _, remainingMs, _ = GetPlayerAuraDuration(playerAuraSlot)
+    if remainingMs and remainingMs > 0 then
+      return remainingMs / 1000
     end
   end
 
@@ -4337,29 +4241,13 @@ local function _EnsureItemTexture(frame, data)
     end
 
   elseif invSlotName == "TRINKET_BOTH" then
-    -- Prefer the usable trinket's texture.
-    -- If BOTH are usable, prefer slot 1.
-    -- If neither is usable (no "Use:" effect), fall back cosmetically: slot 1 if present else slot 2.
-    local has1, on1, rem1, dur1, isUse1 = _GetInventorySlotState(INV_SLOT_TRINKET1)
-    local has2, on2, rem2, dur2, isUse2 = _GetInventorySlotState(INV_SLOT_TRINKET2)
-
-    local use1 = has1 and isUse1
-    local use2 = has2 and isUse2
-
-    if use1 and use2 then
+    -- Cosmetic choice: prefer trinket #1's icon if present, else trinket #2
+    local has1 = GetInventoryItemLink("player", INV_SLOT_TRINKET1) ~= nil
+    local has2 = GetInventoryItemLink("player", INV_SLOT_TRINKET2) ~= nil
+    if has1 then
       slot = INV_SLOT_TRINKET1
-    elseif use1 then
-      slot = INV_SLOT_TRINKET1
-    elseif use2 then
+    elseif has2 then
       slot = INV_SLOT_TRINKET2
-    else
-      local link1 = GetInventoryItemLink("player", INV_SLOT_TRINKET1)
-      local link2 = GetInventoryItemLink("player", INV_SLOT_TRINKET2)
-      if link1 then
-        slot = INV_SLOT_TRINKET1
-      elseif link2 then
-        slot = INV_SLOT_TRINKET2
-      end
     end
   end
 
@@ -4420,7 +4308,7 @@ local function _IconHasTimeLogic_Item(data)
   end
   local c = data.conditions.item
 
-  if c.mode == "oncd" or c.mode == "notcd" or c.mode == "both" then
+  if c.mode == "oncd" or c.mode == "notcd" then
     return true
   end
 
@@ -5442,7 +5330,7 @@ local function CheckItemConditions(data)
   -- --------------------------------------------------------------------
   -- 9. Remaining (item cooldown time left)
   --     Editor only allows this when mode == "oncd" and not whereMissing.
-  --     Special-case: equipped weapon slots + mode=notcd/both => compare against temp enchant remaining.
+  --     Special-case: equipped weapon slots + mode=notcd => compare against temp enchant remaining.
   -- --------------------------------------------------------------------
   if show and c.remainingEnabled
       and c.remainingComp and c.remainingComp ~= ""
@@ -5450,8 +5338,8 @@ local function CheckItemConditions(data)
 
     local threshold = tonumber(c.remainingVal)
     if threshold then
-      -- Equipped weapon slots + notcd/both: use temp enchant remaining (seconds)
-      if (c.mode == "notcd" or c.mode == "both")
+      -- Equipped weapon slots + notcd: use temp enchant remaining (seconds)
+      if (c.mode == "notcd")
           and (data.displayName == "---EQUIPPED WEAPON SLOTS---")
           and (c.inventorySlot == "MAINHAND" or c.inventorySlot == "OFFHAND" or c.inventorySlot == "RANGED") then
 
@@ -6170,8 +6058,8 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
         -- Reuse this later for stack counter too
         itemState = _EvaluateItemCoreState(dataTbl, ci)
 
-        -- Special case: equipped weapon slots + mode=notcd/both => show temp enchant remaining time
-        if (ci.mode == "notcd" or ci.mode == "both")
+        -- Special case: equipped weapon slots + mode=notcd => show temp enchant remaining time
+        if (ci.mode == "notcd")
             and (dataTbl.displayName == "---EQUIPPED WEAPON SLOTS---")
             and (ci.inventorySlot == "MAINHAND" or ci.inventorySlot == "OFFHAND" or ci.inventorySlot == "RANGED") then
 
