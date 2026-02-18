@@ -21,6 +21,9 @@ local DoiteTargetAuras = {
   cappedBuffsExpirationTime = {}, -- spell name -> expiration time in seconds
   cappedBuffsStacks = {}, -- spell name -> stacks
 
+  numActiveBuffs = 0,
+  numActiveDebuffs = 0,
+
   targetGuid = "",
 
   buffCapEventsEnabled = false,
@@ -82,6 +85,8 @@ local function ResetAuras()
   end
   DoiteTargetAuras.activeBuffs = {}
   DoiteTargetAuras.activeDebuffs = {}
+  DoiteTargetAuras.numActiveBuffs = 0
+  DoiteTargetAuras.numActiveDebuffs = 0
 end
 
 local function UpdateTargetGuid()
@@ -110,6 +115,8 @@ local function UpdateAuras()
 
   DoiteTargetAuras.activeBuffs = {}
   DoiteTargetAuras.activeDebuffs = {}
+  DoiteTargetAuras.numActiveBuffs = 0
+  DoiteTargetAuras.numActiveDebuffs = 0
 
   local i
   for i = 1, MAX_BUFF_SLOTS do
@@ -118,6 +125,7 @@ local function UpdateAuras()
       DoiteTargetAuras.buffs[i].spellId = spellId
       DoiteTargetAuras.buffs[i].stacks = auraStacks[i] + 1
       MarkActive(spellId, DoiteTargetAuras.activeBuffs, i)
+      DoiteTargetAuras.numActiveBuffs = i
     else
       DoiteTargetAuras.buffs[i].spellId = nil
       DoiteTargetAuras.buffs[i].stacks = nil
@@ -131,10 +139,15 @@ local function UpdateAuras()
       DoiteTargetAuras.debuffs[i].spellId = spellId
       DoiteTargetAuras.debuffs[i].stacks = auraStacks[auraIndex] + 1
       MarkActive(spellId, DoiteTargetAuras.activeDebuffs, i)
+      DoiteTargetAuras.numActiveDebuffs = i
     else
       DoiteTargetAuras.debuffs[i].spellId = nil
       DoiteTargetAuras.debuffs[i].stacks = nil
     end
+  end
+
+  if DoiteTargetAuras.numActiveBuffs >= MAX_BUFF_SLOTS then
+    DoiteTargetAuras.RegisterBuffCapEvents()
   end
 end
 
@@ -195,6 +208,20 @@ function DoiteTargetAuras.GetBuffStacks(spellName)
     if DoiteTargetAuras.buffs[i].spellId == spellId then
       return DoiteTargetAuras.buffs[i].stacks
     end
+  end
+
+  return nil
+end
+
+function DoiteTargetAuras.GetActiveAuraSlot(spellName)
+  local buffSlot = DoiteTargetAuras.activeBuffs[spellName]
+  if buffSlot then
+    return buffSlot - 1
+  end
+
+  local debuffSlot = DoiteTargetAuras.activeDebuffs[spellName]
+  if debuffSlot then
+    return MAX_BUFF_SLOTS + debuffSlot - 1
   end
 
   return nil
@@ -303,6 +330,7 @@ BuffAddedOtherFrame:SetScript("OnEvent", function()
   local spellId = arg3
   local stacks = arg4
   local auraSlot = arg6
+  local state = arg7
 
   if auraSlot < 0 or auraSlot >= MAX_BUFF_SLOTS then
     return
@@ -312,6 +340,13 @@ BuffAddedOtherFrame:SetScript("OnEvent", function()
   DoiteTargetAuras.buffs[slot].spellId = spellId
   DoiteTargetAuras.buffs[slot].stacks = stacks
   MarkActive(spellId, DoiteTargetAuras.activeBuffs, slot)
+
+  if state == 0 then
+    DoiteTargetAuras.numActiveBuffs = DoiteTargetAuras.numActiveBuffs + 1
+    if DoiteTargetAuras.numActiveBuffs >= MAX_BUFF_SLOTS then
+      DoiteTargetAuras.RegisterBuffCapEvents()
+    end
+  end
   NotifyConditionsChanged()
 end)
 
@@ -337,6 +372,21 @@ BuffRemovedOtherFrame:SetScript("OnEvent", function()
     DoiteTargetAuras.buffs[slot].spellId = nil
     DoiteTargetAuras.buffs[slot].stacks = nil
     MarkInactive(spellId, DoiteTargetAuras.activeBuffs)
+    DoiteTargetAuras.numActiveBuffs = DoiteTargetAuras.numActiveBuffs - 1
+
+    if DoiteTargetAuras.buffCapEventsEnabled then
+      local hasActiveCappedBuffs = false
+      for _, expiration in pairs(DoiteTargetAuras.cappedBuffsExpirationTime) do
+        if expiration > GetTime() then
+          hasActiveCappedBuffs = true
+          break
+        end
+      end
+
+      if not hasActiveCappedBuffs then
+        DoiteTargetAuras.UnregisterBuffCapEvents()
+      end
+    end
   else
     DoiteTargetAuras.buffs[slot].stacks = stacks
   end
@@ -363,6 +413,10 @@ DebuffAddedOtherFrame:SetScript("OnEvent", function()
   DoiteTargetAuras.debuffs[slot].spellId = spellId
   DoiteTargetAuras.debuffs[slot].stacks = stacks
   MarkActive(spellId, DoiteTargetAuras.activeDebuffs, slot)
+
+  if arg7 == 0 then
+    DoiteTargetAuras.numActiveDebuffs = DoiteTargetAuras.numActiveDebuffs + 1
+  end
   NotifyConditionsChanged()
 end)
 
@@ -388,6 +442,7 @@ DebuffRemovedOtherFrame:SetScript("OnEvent", function()
     DoiteTargetAuras.debuffs[slot].spellId = nil
     DoiteTargetAuras.debuffs[slot].stacks = nil
     MarkInactive(spellId, DoiteTargetAuras.activeDebuffs)
+    DoiteTargetAuras.numActiveDebuffs = DoiteTargetAuras.numActiveDebuffs - 1
   else
     DoiteTargetAuras.debuffs[slot].stacks = stacks
   end
@@ -395,7 +450,6 @@ DebuffRemovedOtherFrame:SetScript("OnEvent", function()
 end)
 
 local AuraCastOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_AuraCastOther")
-AuraCastOtherFrame:RegisterEvent("AURA_CAST_ON_OTHER")
 AuraCastOtherFrame:SetScript("OnEvent", function()
   local spellId = arg1
   local targetGuid = arg3
@@ -441,3 +495,19 @@ AuraCastOtherFrame:SetScript("OnEvent", function()
   DoiteTargetAuras.cappedBuffsStacks[spellName] = math.min(currentStacks + 1, maxStacks)
   NotifyConditionsChanged()
 end)
+
+function DoiteTargetAuras.RegisterBuffCapEvents()
+  if DoiteTargetAuras.buffCapEventsEnabled then
+    return
+  end
+  DoiteTargetAuras.buffCapEventsEnabled = true
+  AuraCastOtherFrame:RegisterEvent("AURA_CAST_ON_OTHER")
+end
+
+function DoiteTargetAuras.UnregisterBuffCapEvents()
+  if not DoiteTargetAuras.buffCapEventsEnabled then
+    return
+  end
+  DoiteTargetAuras.buffCapEventsEnabled = false
+  AuraCastOtherFrame:UnregisterEvent("AURA_CAST_ON_OTHER")
+end
