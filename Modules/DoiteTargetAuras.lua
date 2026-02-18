@@ -35,13 +35,6 @@ end
 
 _G["DoiteTargetAuras"] = DoiteTargetAuras
 
-local function NotifyConditionsChanged()
-  local req = _G["DoiteConditions_RequestImmediateEval"]
-  if req then
-    req()
-  end
-end
-
 local function MarkActive(spellId, activeTable, slot)
   if not DoiteTargetAuras.spellIdToNameCache[spellId] then
     local spellName = GetSpellRecField(spellId, "name")
@@ -140,7 +133,6 @@ end
 
 function DoiteTargetAuras.Refresh()
   UpdateAuras()
-  NotifyConditionsChanged()
 end
 
 function DoiteTargetAuras.IsHiddenByBuffCap(spellName)
@@ -275,7 +267,6 @@ TargetChangedFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 TargetChangedFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
 TargetChangedFrame:SetScript("OnEvent", function()
   UpdateAuras()
-  NotifyConditionsChanged()
 end)
 
 local BuffAddedOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_BuffAddedOther")
@@ -298,7 +289,6 @@ BuffAddedOtherFrame:SetScript("OnEvent", function()
   DoiteTargetAuras.buffs[slot].spellId = spellId
   DoiteTargetAuras.buffs[slot].stacks = stacks
   MarkActive(spellId, DoiteTargetAuras.activeBuffs, slot)
-  NotifyConditionsChanged()
 end)
 
 local BuffRemovedOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_BuffRemovedOther")
@@ -326,7 +316,6 @@ BuffRemovedOtherFrame:SetScript("OnEvent", function()
   else
     DoiteTargetAuras.buffs[slot].stacks = stacks
   end
-  NotifyConditionsChanged()
 end)
 
 local DebuffAddedOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_DebuffAddedOther")
@@ -349,7 +338,6 @@ DebuffAddedOtherFrame:SetScript("OnEvent", function()
   DoiteTargetAuras.debuffs[slot].spellId = spellId
   DoiteTargetAuras.debuffs[slot].stacks = stacks
   MarkActive(spellId, DoiteTargetAuras.activeDebuffs, slot)
-  NotifyConditionsChanged()
 end)
 
 local DebuffRemovedOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_DebuffRemovedOther")
@@ -377,7 +365,6 @@ DebuffRemovedOtherFrame:SetScript("OnEvent", function()
   else
     DoiteTargetAuras.debuffs[slot].stacks = stacks
   end
-  NotifyConditionsChanged()
 end)
 
 local AuraCastOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_AuraCastOther")
@@ -425,5 +412,4 @@ AuraCastOtherFrame:SetScript("OnEvent", function()
   local currentStacks = DoiteTargetAuras.cappedBuffsStacks[spellName] or 0
   local maxStacks = DoiteTargetAuras.spellNameToMaxStacks[spellName] or 1
   DoiteTargetAuras.cappedBuffsStacks[spellName] = math.min(currentStacks + 1, maxStacks)
-  NotifyConditionsChanged()
 end)

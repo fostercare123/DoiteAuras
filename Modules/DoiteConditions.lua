@@ -2342,21 +2342,12 @@ local function _GetBaseXY(key, dataTbl)
 end
 
 -- Player-only aura remaining (seconds); nil if not timed / not found.
-local function _PlayerAuraRemainingSeconds(auraName)
+local function _TargetAuraRemainingSeconds(auraName)
   if not auraName then
     return nil
   end
 
-  local playerAuraSlot = DoitePlayerAuras.GetActiveAuraSlot(auraName)
-  if playerAuraSlot then
-    local _, remainingMs, _ = GetPlayerAuraDuration(playerAuraSlot)
-    if remainingMs and remainingMs > 0 then
-      return remainingMs / 1000
-    end
-  end
-
-  -- get remaining for buff cap spells
-  local remaining = DoitePlayerAuras.GetHiddenBuffRemaining(auraName)
+  local remaining = DoiteTargetAuras.GetHiddenBuffRemaining(auraName)
   if remaining and remaining > 0 then
     return remaining
   end
@@ -2604,14 +2595,18 @@ local function _AuraConditions_CheckEntry(entry)
   ----------------------------------------------------------------
   local wantDebuff = (entry.buffType == "DEBUFF")
 
-  local unit = entry.unit or "player"
+  local unit = entry.unit or "target"
   if unit ~= "player" and unit ~= "target" then
-    unit = "player"
+    unit = "target"
   end
 
-  -- If explicitly target "target" but have no target, do not pass
-  if unit == "target" and (not UnitExists("target")) then
+  if not UnitExists("target") then
     return false
+  end
+
+  -- shift legacy player aura unit checks onto target auras
+  if unit == "player" then
+    unit = "target"
   end
 
   ----------------------------------------------------------------
@@ -2655,16 +2650,7 @@ local function _AuraConditions_CheckEntry(entry)
   ----------------------------------------------------------------
   local hasAura = false
 
-  if unit == "player" then
-    if (not wantDebuff) and DoitePlayerAuras.HasBuff(name) then
-      hasAura = true
-    elseif wantDebuff and DoitePlayerAuras.HasDebuff(name) then
-      hasAura = true
-    end
-  else
-    -- unit == "target"
-    hasAura = _TargetHasAura(name, wantDebuff)
-  end
+  hasAura = _TargetHasAura(name, wantDebuff)
 
   ----------------------------------------------------------------
   -- If stacks enabled and aura exists, compute stacks and compare.
@@ -2745,17 +2731,17 @@ _StacksPasses = function(cnt, comp, target)
   return true
 end
 
--- Get stack count for a named aura on target (or player).
+-- Get stack count for a named aura on a unit. Uses DoiteTargetAuras for target checks.
 _GetAuraStacksOnUnit = function(unit, auraName, wantDebuff)
   if not unit or not auraName then
     return nil
   end
 
-  if unit == "player" then
+  if unit == "target" then
     if wantDebuff then
-      return DoitePlayerAuras.GetDebuffStacks(auraName)
+      return DoiteTargetAuras.GetDebuffStacks(auraName)
     else
-      return DoitePlayerAuras.GetBuffStacks(auraName)
+      return DoiteTargetAuras.GetBuffStacks(auraName)
     end
   elseif unit == "target" then
     if wantDebuff then
@@ -2765,7 +2751,7 @@ _GetAuraStacksOnUnit = function(unit, auraName, wantDebuff)
     end
   end
 
-  -- fallback logic for units other than player/current target
+  -- fallback logic for units other than current target
   ----------------------------------------------------------------
   -- Primary scan: normal BUFF / DEBUFF list for non-player units
   ----------------------------------------------------------------
@@ -4332,7 +4318,9 @@ end
 -- _RebuildTargetAuraTimers removed - now using DoiteTargetAuras for on-demand time calculation
 
 function DoiteConditions:ProcessPendingAuraScans()
-  -- Target aura state is handled by DoiteTargetAuras. Keep local snapshot empty/stale-safe.
+  -- Target aura scanning removed - now handled by DoiteTargetAuras event-driven tracking
+
+  -- Target: scan if (and only if) target aura tracking is in use; else keep snapshot empty.
   if self._pendingAuraScanTarget then
     self._pendingAuraScanTarget = false
     self:_ClearTargetAuraSnapshot()
@@ -5431,16 +5419,16 @@ local function CheckAuraConditions(data)
 
   local found = false
 
-  -- Self auras — aura on player, regardless of target
+  -- Self auras now evaluate against current target auras
   if (not found) and allowSelf then
     local hit = false
 
     if wantBuff then
-      hit = DoitePlayerAuras.HasBuff(name)
+      hit = DoiteTargetAuras.HasBuff(name)
     end
 
     if (not hit) and wantDebuff then
-      hit = DoitePlayerAuras.HasDebuff(name)
+      hit = DoiteTargetAuras.HasDebuff(name)
     end
 
     if hit then
@@ -5483,7 +5471,7 @@ local function CheckAuraConditions(data)
     local ownerUnit = nil
 
     if allowSelf then
-      ownerUnit = "player"
+      ownerUnit = "target"
     elseif (allowHelp or allowHarm) and UnitExists("target") then
       ownerUnit = "target"
     end
@@ -5662,7 +5650,7 @@ local function CheckAuraConditions(data)
 
         if targetSelf then
           -- PLAYER/SELF remaining time must reflect the actual visible aura time (vanilla API)
-          local rem = _PlayerAuraRemainingSeconds(name)
+          local rem = _TargetAuraRemainingSeconds(name)
 
           if rem and rem > 0 then
             pass = _RemainingPasses(rem, comp, threshold)
@@ -6068,7 +6056,7 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
 
         if targetSelf then
           -- PLAYER/SELF remaining-time text must reflect the actual visible aura time (vanilla/tooltip scan), never DoiteTrack. Ownership filtering (onlyMine/onlyOthers) belongs in the condition logic.
-          remAura = _PlayerAuraRemainingSeconds(auraName)
+          remAura = _TargetAuraRemainingSeconds(auraName)
         else
           -- Target remaining time relies on DoiteTrack (vanilla target auras don't expose durations).
           remAura = _DoiteTrackAuraRemainingSeconds(auraName, "target")
