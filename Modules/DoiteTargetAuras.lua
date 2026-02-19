@@ -6,20 +6,47 @@
 ---------------------------------------------------------------
 local MAX_BUFF_SLOTS = 32
 local MAX_DEBUFF_SLOTS = 16
+local CACHE_TTL_SECONDS = 15 * 60
+
+local function CreateAuraSlots(size)
+  local slots = {}
+  local i
+  for i = 1, size do
+    slots[i] = { spellId = nil, stacks = nil }
+  end
+  return slots
+end
+
+local function CreateGuidCache(guid)
+  return {
+    guid = guid,
+    buffs = CreateAuraSlots(MAX_BUFF_SLOTS),
+    debuffs = CreateAuraSlots(MAX_DEBUFF_SLOTS),
+    activeBuffs = {},
+    activeDebuffs = {},
+    cappedBuffsExpirationTime = {},
+    cappedBuffsStacks = {},
+    numActiveBuffs = 0,
+    numActiveDebuffs = 0,
+    lastSeenTime = GetTime(),
+  }
+end
 
 local DoiteTargetAuras = {
-  buffs = {}, -- slot -> { spellId, stacks }
-  debuffs = {}, -- slot -> { spellId, stacks }
+  guidCaches = {}, -- guid -> cache
+
+  buffs = {}, -- current target cache only: slot -> { spellId, stacks }
+  debuffs = {}, -- current target cache only: slot -> { spellId, stacks }
 
   spellIdToNameCache = {}, -- spellId -> spell name
   spellNameToIdCache = {}, -- spell name -> spellId
   spellNameToMaxStacks = {}, -- spell name -> max stacks
 
-  activeBuffs = {}, -- spell name -> slot
-  activeDebuffs = {}, -- spell name -> slot
+  activeBuffs = {}, -- current target cache: spell name -> slot
+  activeDebuffs = {}, -- current target cache: spell name -> slot
 
-  cappedBuffsExpirationTime = {}, -- spell name -> expiration time in seconds
-  cappedBuffsStacks = {}, -- spell name -> stacks
+  cappedBuffsExpirationTime = {}, -- current target cache: spell name -> expiration time in seconds
+  cappedBuffsStacks = {}, -- current target cache: spell name -> stacks
 
   numActiveBuffs = 0,
   numActiveDebuffs = 0,
@@ -29,12 +56,7 @@ local DoiteTargetAuras = {
   buffCapEventsEnabled = false,
 }
 
-for i = 1, MAX_BUFF_SLOTS do
-  table.insert(DoiteTargetAuras.buffs, { spellId = nil, stacks = nil })
-end
-for i = 1, MAX_DEBUFF_SLOTS do
-  table.insert(DoiteTargetAuras.debuffs, { spellId = nil, stacks = nil })
-end
+local EmptyCache = CreateGuidCache("")
 
 _G["DoiteTargetAuras"] = DoiteTargetAuras
 
@@ -43,6 +65,45 @@ local function NotifyConditionsChanged()
   if req then
     req()
   end
+end
+
+local function SetActiveCache(cache)
+  DoiteTargetAuras.buffs = cache.buffs
+  DoiteTargetAuras.debuffs = cache.debuffs
+  DoiteTargetAuras.activeBuffs = cache.activeBuffs
+  DoiteTargetAuras.activeDebuffs = cache.activeDebuffs
+  DoiteTargetAuras.cappedBuffsExpirationTime = cache.cappedBuffsExpirationTime
+  DoiteTargetAuras.cappedBuffsStacks = cache.cappedBuffsStacks
+  DoiteTargetAuras.numActiveBuffs = cache.numActiveBuffs
+  DoiteTargetAuras.numActiveDebuffs = cache.numActiveDebuffs
+end
+
+local function CopyCacheCountsFromActive(cache)
+  cache.numActiveBuffs = DoiteTargetAuras.numActiveBuffs
+  cache.numActiveDebuffs = DoiteTargetAuras.numActiveDebuffs
+end
+
+SetActiveCache(EmptyCache)
+
+local function GetGuidCache(guid)
+  if not guid or guid == "" then
+    return nil
+  end
+  return DoiteTargetAuras.guidCaches[guid]
+end
+
+local function GetOrCreateGuidCache(guid)
+  if not guid or guid == "" then
+    return nil
+  end
+
+  local cache = DoiteTargetAuras.guidCaches[guid]
+  if not cache then
+    cache = CreateGuidCache(guid)
+    DoiteTargetAuras.guidCaches[guid] = cache
+  end
+  cache.lastSeenTime = GetTime()
+  return cache
 end
 
 local function MarkActive(spellId, activeTable, slot)
@@ -73,35 +134,57 @@ local function RemoveCappedBuff(spellName)
   DoiteTargetAuras.cappedBuffsStacks[spellName] = 0
 end
 
-local function ResetAuras()
-  local i
-  for i = 1, MAX_BUFF_SLOTS do
-    DoiteTargetAuras.buffs[i].spellId = nil
-    DoiteTargetAuras.buffs[i].stacks = nil
+local function HasAnyActiveCappedBuffs()
+  local now = GetTime()
+  local _, cache
+  for _, cache in pairs(DoiteTargetAuras.guidCaches) do
+    local _, expiration
+    for _, expiration in pairs(cache.cappedBuffsExpirationTime) do
+      if expiration > now then
+        return true
+      end
+    end
   end
-  for i = 1, MAX_DEBUFF_SLOTS do
-    DoiteTargetAuras.debuffs[i].spellId = nil
-    DoiteTargetAuras.debuffs[i].stacks = nil
+
+  return false
+end
+
+local function CleanupGuidCaches()
+  local now = GetTime()
+  local guid, cache
+  for guid, cache in pairs(DoiteTargetAuras.guidCaches) do
+    if (now - cache.lastSeenTime) > CACHE_TTL_SECONDS then
+      DoiteTargetAuras.guidCaches[guid] = nil
+    end
   end
-  DoiteTargetAuras.activeBuffs = {}
-  DoiteTargetAuras.activeDebuffs = {}
-  DoiteTargetAuras.numActiveBuffs = 0
-  DoiteTargetAuras.numActiveDebuffs = 0
+end
+
+local function SetTargetGuid(guid)
+  if not guid or guid == "" then
+    DoiteTargetAuras.targetGuid = ""
+    SetActiveCache(EmptyCache)
+    return nil
+  end
+
+  DoiteTargetAuras.targetGuid = guid
+  local cache = GetOrCreateGuidCache(guid)
+  SetActiveCache(cache)
+  return cache
 end
 
 local function UpdateTargetGuid()
   local _, guid = UnitExists("target")
-  if guid and guid ~= "" then
-    DoiteTargetAuras.targetGuid = guid
-    return true
-  end
-  DoiteTargetAuras.targetGuid = ""
-  return false
+  return SetTargetGuid(guid)
 end
 
 local function UpdateAuras()
-  if not UpdateTargetGuid() then
-    ResetAuras()
+  CleanupGuidCaches()
+
+  local cache = UpdateTargetGuid()
+  if not cache then
+    if not HasAnyActiveCappedBuffs() then
+      DoiteTargetAuras.UnregisterBuffCapEvents()
+    end
     return
   end
 
@@ -109,14 +192,18 @@ local function UpdateAuras()
   local auraStacks = GetUnitField("target", "auraApplications")
 
   if not auraSpellIds or not auraStacks then
-    ResetAuras()
+    if not HasAnyActiveCappedBuffs() then
+      DoiteTargetAuras.UnregisterBuffCapEvents()
+    end
     return
   end
 
-  DoiteTargetAuras.activeBuffs = {}
-  DoiteTargetAuras.activeDebuffs = {}
-  DoiteTargetAuras.numActiveBuffs = 0
-  DoiteTargetAuras.numActiveDebuffs = 0
+  cache.activeBuffs = {}
+  cache.activeDebuffs = {}
+  cache.numActiveBuffs = 0
+  cache.numActiveDebuffs = 0
+
+  SetActiveCache(cache)
 
   local i
   for i = 1, MAX_BUFF_SLOTS do
@@ -146,8 +233,12 @@ local function UpdateAuras()
     end
   end
 
+  CopyCacheCountsFromActive(cache)
+
   if DoiteTargetAuras.numActiveBuffs >= MAX_BUFF_SLOTS then
     DoiteTargetAuras.RegisterBuffCapEvents()
+  elseif not HasAnyActiveCappedBuffs() then
+    DoiteTargetAuras.UnregisterBuffCapEvents()
   end
 end
 
@@ -319,134 +410,191 @@ TargetChangedFrame:SetScript("OnEvent", function()
   NotifyConditionsChanged()
 end)
 
+local UnitDiedFrame = CreateFrame("Frame", "DoiteTargetAuras_UnitDied")
+UnitDiedFrame:RegisterEvent("UNIT_DIED")
+UnitDiedFrame:SetScript("OnEvent", function()
+  local guid = arg1
+  if not guid or guid == "" then
+    return
+  end
+
+  DoiteTargetAuras.guidCaches[guid] = nil
+  if guid == DoiteTargetAuras.targetGuid then
+    SetTargetGuid(nil)
+    NotifyConditionsChanged()
+  end
+
+  if not HasAnyActiveCappedBuffs() then
+    DoiteTargetAuras.UnregisterBuffCapEvents()
+  end
+end)
+
 local BuffAddedOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_BuffAddedOther")
 BuffAddedOtherFrame:RegisterEvent("BUFF_ADDED_OTHER")
 BuffAddedOtherFrame:SetScript("OnEvent", function()
   local guid = arg1
-  if guid ~= DoiteTargetAuras.targetGuid then
-    return
-  end
-
   local spellId = arg3
   local stacks = arg4
   local auraSlot = arg6
   local state = arg7
 
+  if not guid or guid == "" then
+    return
+  end
+
   if auraSlot < 0 or auraSlot >= MAX_BUFF_SLOTS then
     return
   end
 
+  local cache = GetGuidCache(guid)
+  if not cache and guid ~= DoiteTargetAuras.targetGuid then
+    return
+  end
+  cache = cache or GetOrCreateGuidCache(guid)
+
   local slot = auraSlot + 1
-  DoiteTargetAuras.buffs[slot].spellId = spellId
-  DoiteTargetAuras.buffs[slot].stacks = stacks
-  MarkActive(spellId, DoiteTargetAuras.activeBuffs, slot)
+  cache.buffs[slot].spellId = spellId
+  cache.buffs[slot].stacks = stacks
+  MarkActive(spellId, cache.activeBuffs, slot)
 
   if state == 0 then
-    DoiteTargetAuras.numActiveBuffs = DoiteTargetAuras.numActiveBuffs + 1
-    if DoiteTargetAuras.numActiveBuffs >= MAX_BUFF_SLOTS then
+    cache.numActiveBuffs = cache.numActiveBuffs + 1
+    if cache.numActiveBuffs >= MAX_BUFF_SLOTS then
       DoiteTargetAuras.RegisterBuffCapEvents()
     end
   end
-  NotifyConditionsChanged()
+
+  cache.lastSeenTime = GetTime()
+
+  if guid == DoiteTargetAuras.targetGuid then
+    SetActiveCache(cache)
+    NotifyConditionsChanged()
+  end
 end)
 
 local BuffRemovedOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_BuffRemovedOther")
 BuffRemovedOtherFrame:RegisterEvent("BUFF_REMOVED_OTHER")
 BuffRemovedOtherFrame:SetScript("OnEvent", function()
   local guid = arg1
-  if guid ~= DoiteTargetAuras.targetGuid then
-    return
-  end
-
   local spellId = arg3
   local stacks = arg4
   local auraSlot = arg6
   local state = arg7
 
+  if not guid or guid == "" then
+    return
+  end
+
   if auraSlot < 0 or auraSlot >= MAX_BUFF_SLOTS then
     return
   end
 
+  local cache = GetGuidCache(guid)
+  if not cache and guid ~= DoiteTargetAuras.targetGuid then
+    return
+  end
+  cache = cache or GetOrCreateGuidCache(guid)
+
   local slot = auraSlot + 1
   if state == 1 then
-    DoiteTargetAuras.buffs[slot].spellId = nil
-    DoiteTargetAuras.buffs[slot].stacks = nil
-    MarkInactive(spellId, DoiteTargetAuras.activeBuffs)
-    DoiteTargetAuras.numActiveBuffs = DoiteTargetAuras.numActiveBuffs - 1
-
-    if DoiteTargetAuras.buffCapEventsEnabled then
-      local hasActiveCappedBuffs = false
-      for _, expiration in pairs(DoiteTargetAuras.cappedBuffsExpirationTime) do
-        if expiration > GetTime() then
-          hasActiveCappedBuffs = true
-          break
-        end
-      end
-
-      if not hasActiveCappedBuffs then
-        DoiteTargetAuras.UnregisterBuffCapEvents()
-      end
-    end
+    cache.buffs[slot].spellId = nil
+    cache.buffs[slot].stacks = nil
+    MarkInactive(spellId, cache.activeBuffs)
+    cache.numActiveBuffs = cache.numActiveBuffs - 1
   else
-    DoiteTargetAuras.buffs[slot].stacks = stacks
+    cache.buffs[slot].stacks = stacks
   end
-  NotifyConditionsChanged()
+
+  cache.lastSeenTime = GetTime()
+
+  if guid == DoiteTargetAuras.targetGuid then
+    SetActiveCache(cache)
+    NotifyConditionsChanged()
+  end
+
+  if not HasAnyActiveCappedBuffs() then
+    DoiteTargetAuras.UnregisterBuffCapEvents()
+  end
 end)
 
 local DebuffAddedOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_DebuffAddedOther")
 DebuffAddedOtherFrame:RegisterEvent("DEBUFF_ADDED_OTHER")
 DebuffAddedOtherFrame:SetScript("OnEvent", function()
   local guid = arg1
-  if guid ~= DoiteTargetAuras.targetGuid then
-    return
-  end
-
   local spellId = arg3
   local stacks = arg4
   local auraSlot = arg6
+
+  if not guid or guid == "" then
+    return
+  end
 
   if auraSlot < MAX_BUFF_SLOTS or auraSlot >= (MAX_BUFF_SLOTS + MAX_DEBUFF_SLOTS) then
     return
   end
 
+  local cache = GetGuidCache(guid)
+  if not cache and guid ~= DoiteTargetAuras.targetGuid then
+    return
+  end
+  cache = cache or GetOrCreateGuidCache(guid)
+
   local slot = auraSlot - MAX_BUFF_SLOTS + 1
-  DoiteTargetAuras.debuffs[slot].spellId = spellId
-  DoiteTargetAuras.debuffs[slot].stacks = stacks
-  MarkActive(spellId, DoiteTargetAuras.activeDebuffs, slot)
+  cache.debuffs[slot].spellId = spellId
+  cache.debuffs[slot].stacks = stacks
+  MarkActive(spellId, cache.activeDebuffs, slot)
 
   if arg7 == 0 then
-    DoiteTargetAuras.numActiveDebuffs = DoiteTargetAuras.numActiveDebuffs + 1
+    cache.numActiveDebuffs = cache.numActiveDebuffs + 1
   end
-  NotifyConditionsChanged()
+
+  cache.lastSeenTime = GetTime()
+
+  if guid == DoiteTargetAuras.targetGuid then
+    SetActiveCache(cache)
+    NotifyConditionsChanged()
+  end
 end)
 
 local DebuffRemovedOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_DebuffRemovedOther")
 DebuffRemovedOtherFrame:RegisterEvent("DEBUFF_REMOVED_OTHER")
 DebuffRemovedOtherFrame:SetScript("OnEvent", function()
   local guid = arg1
-  if guid ~= DoiteTargetAuras.targetGuid then
-    return
-  end
-
   local spellId = arg3
   local stacks = arg4
   local auraSlot = arg6
   local state = arg7
 
+  if not guid or guid == "" then
+    return
+  end
+
   if auraSlot < MAX_BUFF_SLOTS or auraSlot >= (MAX_BUFF_SLOTS + MAX_DEBUFF_SLOTS) then
     return
   end
 
+  local cache = GetGuidCache(guid)
+  if not cache and guid ~= DoiteTargetAuras.targetGuid then
+    return
+  end
+  cache = cache or GetOrCreateGuidCache(guid)
+
   local slot = auraSlot - MAX_BUFF_SLOTS + 1
   if state == 1 then
-    DoiteTargetAuras.debuffs[slot].spellId = nil
-    DoiteTargetAuras.debuffs[slot].stacks = nil
-    MarkInactive(spellId, DoiteTargetAuras.activeDebuffs)
-    DoiteTargetAuras.numActiveDebuffs = DoiteTargetAuras.numActiveDebuffs - 1
+    cache.debuffs[slot].spellId = nil
+    cache.debuffs[slot].stacks = nil
+    MarkInactive(spellId, cache.activeDebuffs)
+    cache.numActiveDebuffs = cache.numActiveDebuffs - 1
   else
-    DoiteTargetAuras.debuffs[slot].stacks = stacks
+    cache.debuffs[slot].stacks = stacks
   end
-  NotifyConditionsChanged()
+
+  cache.lastSeenTime = GetTime()
+
+  if guid == DoiteTargetAuras.targetGuid then
+    SetActiveCache(cache)
+    NotifyConditionsChanged()
+  end
 end)
 
 local AuraCastOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_AuraCastOther")
@@ -456,13 +604,19 @@ AuraCastOtherFrame:SetScript("OnEvent", function()
   local durationMs = arg8
   local auraCapStatus = arg9
 
-  if targetGuid ~= DoiteTargetAuras.targetGuid then
+  if not targetGuid or targetGuid == "" then
     return
   end
 
   if not (auraCapStatus == 1 or auraCapStatus == 3) then
     return
   end
+
+  local cache = GetGuidCache(targetGuid)
+  if not cache and targetGuid ~= DoiteTargetAuras.targetGuid then
+    return
+  end
+  cache = cache or GetOrCreateGuidCache(targetGuid)
 
   local spellName = DoiteTargetAuras.spellIdToNameCache[spellId]
   if not spellName then
@@ -483,17 +637,22 @@ AuraCastOtherFrame:SetScript("OnEvent", function()
     DoiteTargetAuras.spellNameToMaxStacks[spellName] = maxStacks
   end
 
-  local expirationTime = DoiteTargetAuras.cappedBuffsExpirationTime[spellName]
+  local expirationTime = cache.cappedBuffsExpirationTime[spellName]
   if expirationTime and expirationTime > 0 and expirationTime <= GetTime() then
-    DoiteTargetAuras.cappedBuffsStacks[spellName] = 0
+    cache.cappedBuffsStacks[spellName] = 0
   end
 
-  DoiteTargetAuras.cappedBuffsExpirationTime[spellName] = GetTime() + durationMs / 1000.0
+  cache.cappedBuffsExpirationTime[spellName] = GetTime() + durationMs / 1000.0
 
-  local currentStacks = DoiteTargetAuras.cappedBuffsStacks[spellName] or 0
+  local currentStacks = cache.cappedBuffsStacks[spellName] or 0
   local maxStacks = DoiteTargetAuras.spellNameToMaxStacks[spellName] or 1
-  DoiteTargetAuras.cappedBuffsStacks[spellName] = math.min(currentStacks + 1, maxStacks)
-  NotifyConditionsChanged()
+  cache.cappedBuffsStacks[spellName] = math.min(currentStacks + 1, maxStacks)
+  cache.lastSeenTime = GetTime()
+
+  if targetGuid == DoiteTargetAuras.targetGuid then
+    SetActiveCache(cache)
+    NotifyConditionsChanged()
+  end
 end)
 
 function DoiteTargetAuras.RegisterBuffCapEvents()
