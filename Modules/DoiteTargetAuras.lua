@@ -8,20 +8,11 @@ local MAX_BUFF_SLOTS = 32
 local MAX_DEBUFF_SLOTS = 16
 local CACHE_TTL_SECONDS = 15 * 60
 
-local function CreateAuraSlots(size)
-  local slots = {}
-  local i
-  for i = 1, size do
-    slots[i] = { spellId = nil, stacks = nil }
-  end
-  return slots
-end
-
 local function CreateGuidCache(guid)
   return {
     guid = guid,
-    buffs = CreateAuraSlots(MAX_BUFF_SLOTS),
-    debuffs = CreateAuraSlots(MAX_DEBUFF_SLOTS),
+    buffs = {},
+    debuffs = {},
     activeBuffs = {},
     activeDebuffs = {},
     cappedBuffsExpirationTime = {},
@@ -53,10 +44,8 @@ local DoiteTargetAuras = {
 
   targetGuid = "",
 
-  buffCapEventsEnabled = false,
+  buffCapEventsEnabled = true,
 }
-
-local EmptyCache = CreateGuidCache("")
 
 _G["DoiteTargetAuras"] = DoiteTargetAuras
 
@@ -83,7 +72,7 @@ local function CopyCacheCountsFromActive(cache)
   cache.numActiveDebuffs = DoiteTargetAuras.numActiveDebuffs
 end
 
-SetActiveCache(EmptyCache)
+SetActiveCache(CreateGuidCache(""))
 
 local function GetGuidCache(guid)
   if not guid or guid == "" then
@@ -162,7 +151,7 @@ end
 local function SetTargetGuid(guid)
   if not guid or guid == "" then
     DoiteTargetAuras.targetGuid = ""
-    SetActiveCache(EmptyCache)
+    SetActiveCache(CreateGuidCache(""))
     return nil
   end
 
@@ -209,13 +198,11 @@ local function UpdateAuras()
   for i = 1, MAX_BUFF_SLOTS do
     local spellId = auraSpellIds[i]
     if spellId and spellId ~= 0 then
-      DoiteTargetAuras.buffs[i].spellId = spellId
-      DoiteTargetAuras.buffs[i].stacks = auraStacks[i] + 1
+      DoiteTargetAuras.buffs[i] = { spellId = spellId, stacks = auraStacks[i] + 1 }
       MarkActive(spellId, DoiteTargetAuras.activeBuffs, i)
       DoiteTargetAuras.numActiveBuffs = i
     else
-      DoiteTargetAuras.buffs[i].spellId = nil
-      DoiteTargetAuras.buffs[i].stacks = nil
+      DoiteTargetAuras.buffs[i] = nil
     end
   end
 
@@ -223,13 +210,11 @@ local function UpdateAuras()
     local auraIndex = MAX_BUFF_SLOTS + i
     local spellId = auraSpellIds[auraIndex]
     if spellId and spellId ~= 0 then
-      DoiteTargetAuras.debuffs[i].spellId = spellId
-      DoiteTargetAuras.debuffs[i].stacks = auraStacks[auraIndex] + 1
+      DoiteTargetAuras.debuffs[i] = { spellId = spellId, stacks = auraStacks[auraIndex] + 1 }
       MarkActive(spellId, DoiteTargetAuras.activeDebuffs, i)
       DoiteTargetAuras.numActiveDebuffs = i
     else
-      DoiteTargetAuras.debuffs[i].spellId = nil
-      DoiteTargetAuras.debuffs[i].stacks = nil
+      DoiteTargetAuras.debuffs[i] = nil
     end
   end
 
@@ -293,11 +278,9 @@ function DoiteTargetAuras.GetBuffStacks(spellName)
 
   local i
   for i = 1, MAX_BUFF_SLOTS do
-    if not DoiteTargetAuras.buffs[i].spellId then
-      break
-    end
-    if DoiteTargetAuras.buffs[i].spellId == spellId then
-      return DoiteTargetAuras.buffs[i].stacks
+    local aura = DoiteTargetAuras.buffs[i]
+    if aura and aura.spellId == spellId then
+      return aura.stacks
     end
   end
 
@@ -335,11 +318,9 @@ function DoiteTargetAuras.GetDebuffStacks(spellName)
 
   local i
   for i = 1, MAX_DEBUFF_SLOTS do
-    if not DoiteTargetAuras.debuffs[i].spellId then
-      break
-    end
-    if DoiteTargetAuras.debuffs[i].spellId == spellId then
-      return DoiteTargetAuras.debuffs[i].stacks
+    local aura = DoiteTargetAuras.debuffs[i]
+    if aura and aura.spellId == spellId then
+      return aura.stacks
     end
   end
 
@@ -349,7 +330,8 @@ end
 function DoiteTargetAuras.HasBuffSpellId(spellId)
   local i
   for i = 1, MAX_BUFF_SLOTS do
-    if DoiteTargetAuras.buffs[i].spellId == spellId then
+    local aura = DoiteTargetAuras.buffs[i]
+    if aura and aura.spellId == spellId then
       return true
     end
   end
@@ -371,7 +353,8 @@ end
 function DoiteTargetAuras.HasDebuffSpellId(spellId)
   local i
   for i = 1, MAX_DEBUFF_SLOTS do
-    if DoiteTargetAuras.debuffs[i].spellId == spellId then
+    local aura = DoiteTargetAuras.debuffs[i]
+    if aura and aura.spellId == spellId then
       return true
     end
   end
@@ -453,8 +436,7 @@ BuffAddedOtherFrame:SetScript("OnEvent", function()
   cache = cache or GetOrCreateGuidCache(guid)
 
   local slot = auraSlot + 1
-  cache.buffs[slot].spellId = spellId
-  cache.buffs[slot].stacks = stacks
+  cache.buffs[slot] = { spellId = spellId, stacks = stacks }
   MarkActive(spellId, cache.activeBuffs, slot)
 
   if state == 0 then
@@ -497,12 +479,15 @@ BuffRemovedOtherFrame:SetScript("OnEvent", function()
 
   local slot = auraSlot + 1
   if state == 1 then
-    cache.buffs[slot].spellId = nil
-    cache.buffs[slot].stacks = nil
+    cache.buffs[slot] = nil
     MarkInactive(spellId, cache.activeBuffs)
     cache.numActiveBuffs = cache.numActiveBuffs - 1
   else
-    cache.buffs[slot].stacks = stacks
+    if cache.buffs[slot] then
+      cache.buffs[slot].stacks = stacks
+    else
+      cache.buffs[slot] = { spellId = spellId, stacks = stacks }
+    end
   end
 
   cache.lastSeenTime = GetTime()
@@ -540,8 +525,7 @@ DebuffAddedOtherFrame:SetScript("OnEvent", function()
   cache = cache or GetOrCreateGuidCache(guid)
 
   local slot = auraSlot - MAX_BUFF_SLOTS + 1
-  cache.debuffs[slot].spellId = spellId
-  cache.debuffs[slot].stacks = stacks
+  cache.debuffs[slot] = { spellId = spellId, stacks = stacks }
   MarkActive(spellId, cache.activeDebuffs, slot)
 
   if arg7 == 0 then
@@ -581,12 +565,15 @@ DebuffRemovedOtherFrame:SetScript("OnEvent", function()
 
   local slot = auraSlot - MAX_BUFF_SLOTS + 1
   if state == 1 then
-    cache.debuffs[slot].spellId = nil
-    cache.debuffs[slot].stacks = nil
+    cache.debuffs[slot] = nil
     MarkInactive(spellId, cache.activeDebuffs)
     cache.numActiveDebuffs = cache.numActiveDebuffs - 1
   else
-    cache.debuffs[slot].stacks = stacks
+    if cache.debuffs[slot] then
+      cache.debuffs[slot].stacks = stacks
+    else
+      cache.debuffs[slot] = { spellId = spellId, stacks = stacks }
+    end
   end
 
   cache.lastSeenTime = GetTime()
@@ -598,6 +585,7 @@ DebuffRemovedOtherFrame:SetScript("OnEvent", function()
 end)
 
 local AuraCastOtherFrame = CreateFrame("Frame", "DoiteTargetAuras_AuraCastOther")
+AuraCastOtherFrame:RegisterEvent("AURA_CAST_ON_OTHER")
 AuraCastOtherFrame:SetScript("OnEvent", function()
   local spellId = arg1
   local targetGuid = arg3
@@ -656,17 +644,9 @@ AuraCastOtherFrame:SetScript("OnEvent", function()
 end)
 
 function DoiteTargetAuras.RegisterBuffCapEvents()
-  if DoiteTargetAuras.buffCapEventsEnabled then
-    return
-  end
   DoiteTargetAuras.buffCapEventsEnabled = true
-  AuraCastOtherFrame:RegisterEvent("AURA_CAST_ON_OTHER")
 end
 
 function DoiteTargetAuras.UnregisterBuffCapEvents()
-  if not DoiteTargetAuras.buffCapEventsEnabled then
-    return
-  end
   DoiteTargetAuras.buffCapEventsEnabled = false
-  AuraCastOtherFrame:UnregisterEvent("AURA_CAST_ON_OTHER")
 end
