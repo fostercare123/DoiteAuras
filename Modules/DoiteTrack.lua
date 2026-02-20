@@ -2462,8 +2462,9 @@ function DoiteTrack:GetAuraRemainingSecondsByName(spellName, unit)
         end
       end
     else
-      -- if aura isn't present anymore, clear any stale timer state
-      _ClearAuraStateForGuidSpell(guid, sid)
+      -- Do not clear state here: aura visibility can flicker between scans
+      -- (or coexist with same-name casts by different owners). Let expiry
+      -- logic decide staleness instead of hard-clearing on a single miss.
     end
   end
 
@@ -2534,7 +2535,8 @@ function DoiteTrack:GetAuraOwnershipByName(spellName, unit)
         hasOther = true
       end
     else
-      _ClearAuraStateForGuidSpell(guid, sid)
+      -- Same reasoning as GetAuraRemainingSecondsByName: avoid destructive
+      -- clear on transient miss; preserve mine timer until it truly expires.
     end
   end
 
