@@ -5089,12 +5089,15 @@ local function CheckAuraConditions(data)
     if ownerUnit then
       local _, _, _, isMine, isOther, mineKnown = _DoiteTrackAuraOwnership(name, ownerUnit)
 
-      if mineKnown then
-        if ownerFilter == "mine" and not isMine then
-          found = false
-        elseif ownerFilter == "others" and not isOther then
-          found = false
-        end
+      if not mineKnown then
+        -- Ownership-gated entries should fail closed when DoiteTrack
+        -- cannot classify the aura owner yet. This prevents both
+        -- "onlyMine" and "onlyOthers" variants from showing together.
+        found = false
+      elseif ownerFilter == "mine" and not isMine then
+        found = false
+      elseif ownerFilter == "others" and not isOther then
+        found = false
       end
     end
   end
