@@ -305,8 +305,6 @@ local function _AddTrackedFromEntry(_, data)
   if not entry then
     entry = {
       spellIds = {},
-      spellIdsMine = {},
-      spellIdsOthers = {},
       name = name,
       normName = norm,
       kind = data.type,
@@ -316,28 +314,11 @@ local function _AddTrackedFromEntry(_, data)
       onlyMine = false,
       onlyOthers = false,
     }
-  else
-    if type(entry.spellIds) ~= "table" then
-      entry.spellIds = {}
-    end
-    if type(entry.spellIdsMine) ~= "table" then
-      entry.spellIdsMine = {}
-    end
-    if type(entry.spellIdsOthers) ~= "table" then
-      entry.spellIdsOthers = {}
-    end
   end
 
   if sid then
-    if isOnlyMine then
-      -- Keep spellIds as the timer-driving set (ours-only behavior).
-      entry.spellIds[sid] = true
-      entry.spellIdsMine[sid] = true
-      TrackedBySpellId[sid] = entry
-    end
-    if isOnlyOthers then
-      entry.spellIdsOthers[sid] = true
-    end
+    entry.spellIds[sid] = true
+    TrackedBySpellId[sid] = entry
   end
   if norm then
     TrackedByNameNorm[norm] = entry
@@ -2492,30 +2473,6 @@ function DoiteTrack:GetAuraRemainingSecondsByName(spellName, unit)
   return bestRem, bestSpellId
 end
 
-local function _PickOwnershipSpellSet(entry, wantMine)
-  if not entry then
-    return nil
-  end
-
-  if wantMine then
-    if type(entry.spellIdsMine) == "table" then
-      return entry.spellIdsMine
-    end
-    if entry.onlyMine == true then
-      return entry.spellIds
-    end
-    return nil
-  end
-
-  if type(entry.spellIdsOthers) == "table" then
-    return entry.spellIdsOthers
-  end
-  if entry.onlyOthers == true then
-    return entry.spellIds
-  end
-  return nil
-end
-
 function DoiteTrack:RemainingPassesByName(spellName, unit, comp, threshold)
   if not spellName or not unit or not comp or threshold == nil then
     return nil
@@ -2562,39 +2519,22 @@ function DoiteTrack:GetAuraOwnershipByName(spellName, unit)
   local hasOther = false
   local bestRem, bestSpellId = nil, nil
 
-  local mineSpellIds = _PickOwnershipSpellSet(entry, true)
-  local otherSpellIds = _PickOwnershipSpellSet(entry, false)
-
   local sid
-  if mineSpellIds then
-    for sid in pairs(mineSpellIds) do
-      if _AuraHasSpellId(unit, sid, isDebuff) then
-        local rem = _GetRemainingFromState(guid, sid, now)
-        if rem and rem > 0 then
-          hasMine = true
-          if (not bestRem) or rem > bestRem then
-            bestRem = rem
-            bestSpellId = sid
-          end
+  for sid in pairs(entry.spellIds) do
+    if _AuraHasSpellId(unit, sid, isDebuff) then
+      local rem = _GetRemainingFromState(guid, sid, now)
+      if rem and rem > 0 then
+        hasMine = true
+        if (not bestRem) or rem > bestRem then
+          bestRem = rem
+          bestSpellId = sid
         end
       else
-        _ClearAuraStateForGuidSpell(guid, sid)
+        -- aura present but player have no confirmed timer => treat as "other"
+        hasOther = true
       end
-    end
-  end
-
-  if otherSpellIds then
-    for sid in pairs(otherSpellIds) do
-      if _AuraHasSpellId(unit, sid, isDebuff) then
-        local rem = _GetRemainingFromState(guid, sid, now)
-        if not (rem and rem > 0) then
-          -- aura present but player has no confirmed timer => treat as "other"
-          hasOther = true
-          break
-        end
-      else
-        _ClearAuraStateForGuidSpell(guid, sid)
-      end
+    else
+      _ClearAuraStateForGuidSpell(guid, sid)
     end
   end
 
