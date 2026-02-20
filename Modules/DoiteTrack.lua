@@ -2189,6 +2189,41 @@ function DoiteTrack:_OnAuraNPEvent()
           t[targetGuid] = nil
         end
       end
+    else
+      ----------------------------------------------------------------
+      -- Fallback confirm:
+      -- Some exclusive auras (e.g. same-rank HoTs) can be refreshed by player
+      -- without emitting *_ADDED_* events. If player can currently verify the aura
+      -- on a visible unit, treat this cast as confirmed ownership.
+      ----------------------------------------------------------------
+      local probeUnit = nil
+      if targetGuid == pGuid then
+        probeUnit = "player"
+      else
+        local tGuid = _GetUnitGuidSafe("target")
+        if tGuid and tGuid == targetGuid then
+          probeUnit = "target"
+        end
+      end
+
+      if probeUnit and _AuraHasSpellId(probeUnit, spellId, (entry.kind == "Debuff")) then
+        local bucket = _GetAuraBucketForGuid(targetGuid, true)
+        if bucket then
+          local a = bucket[spellId]
+          if not a then
+            a = {}
+            bucket[spellId] = a
+          end
+
+          a.appliedAt = now
+          a.lastSeen = now
+          a.fullDur = secRounded
+          a.cp = cp or 0
+          a.isDebuff = (entry.kind == "Debuff")
+
+          t[targetGuid] = nil
+        end
+      end
     end
   end
 end
