@@ -166,6 +166,15 @@ local function UpdateTargetGuid()
   return SetTargetGuid(guid)
 end
 
+local function IsCurrentTargetPlayer()
+  if not DoiteTargetAuras.targetGuid or DoiteTargetAuras.targetGuid == "" then
+    return false
+  end
+
+  local _, playerGuid = UnitExists("player")
+  return playerGuid and DoiteTargetAuras.targetGuid == playerGuid
+end
+
 local function UpdateAuras()
   CleanupGuidCaches()
 
@@ -389,6 +398,22 @@ local TargetChangedFrame = CreateFrame("Frame", "DoiteTargetAuras_TargetChanged"
 TargetChangedFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 TargetChangedFrame:RegisterEvent("PLAYER_TARGET_CHANGED")
 TargetChangedFrame:SetScript("OnEvent", function()
+  UpdateAuras()
+  NotifyConditionsChanged()
+end)
+
+-- Self aura NP events are required when player is the current target.
+-- In that case, *_OTHER events do not fire, so refresh target cache directly.
+local SelfAuraFrame = CreateFrame("Frame", "DoiteTargetAuras_SelfAura")
+SelfAuraFrame:RegisterEvent("BUFF_ADDED_SELF")
+SelfAuraFrame:RegisterEvent("BUFF_REMOVED_SELF")
+SelfAuraFrame:RegisterEvent("DEBUFF_ADDED_SELF")
+SelfAuraFrame:RegisterEvent("DEBUFF_REMOVED_SELF")
+SelfAuraFrame:SetScript("OnEvent", function()
+  if not IsCurrentTargetPlayer() then
+    return
+  end
+
   UpdateAuras()
   NotifyConditionsChanged()
 end)
