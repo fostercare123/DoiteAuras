@@ -1373,21 +1373,6 @@ function DoiteAuras_GetIconFrame(key)
     return f
 end
 
-local function GetIconLayout(key)
-    if DoiteDB and DoiteDB.icons and DoiteDB.icons[key] then
-        return DoiteDB.icons[key]
-    end
-    return nil
-end
-
--- helper to get data
-local function GetSpellData(key)
-  if not DoiteAurasDB.spells[key] then
-    DoiteAurasDB.spells[key] = {}
-  end
-  return DoiteAurasDB.spells[key]
-end
-
 -- Helpers
 local function GetOrderedSpells()
     local list = {}
@@ -1531,76 +1516,6 @@ local function DoiteAuras_IsKeyDisabled(key)
     return DA_IsBucketDisabled(bucketKey)
 end
 _G["DoiteAuras_IsKeyDisabled"] = DoiteAuras_IsKeyDisabled
-
--- When the last icon in a group/category is removed, clear
-local function DA_CleanupEmptyGroupAndCategory(groupName, categoryName)
-    if not DoiteAurasDB or not DoiteAurasDB.spells then
-        return
-    end
-
-    -- Normalize sentinels
-    if groupName == "" or groupName == "no" then
-        groupName = nil
-    end
-    if categoryName == "" or categoryName == "no" then
-        categoryName = nil
-    end
-
-    if not groupName and not categoryName then
-        return
-    end
-
-    local hasGroup = false
-    local hasCategory = false
-
-    -- Scan remaining icons to see if any still reference this group/category
-    local k, d
-    for k, d in pairs(DoiteAurasDB.spells) do
-        if d then
-            if groupName and not hasGroup and d.group == groupName then
-                hasGroup = true
-            end
-            if categoryName and not hasCategory and d.category == categoryName then
-                hasCategory = true
-            end
-            if (not groupName or hasGroup) and (not categoryName or hasCategory) then
-                break
-            end
-        end
-    end
-
-    -- If no icons left in this group: drop its sort mode + disabled flag
-    if groupName and not hasGroup then
-        if DoiteAurasDB.groupSort then
-            DoiteAurasDB.groupSort[groupName] = nil
-        end
-        if DoiteAurasDB.bucketDisabled then
-            DoiteAurasDB.bucketDisabled[groupName] = nil
-        end
-        DoiteGroup.InvalidateSortCache(groupName)
-    end
-
-    -- If no icons left with this category: remove it from the global list
-    if categoryName and not hasCategory then
-        local list = DoiteAurasDB.categories
-        if list then
-            local i = 1
-            local n = table.getn(list)
-            while i <= n do
-                if list[i] == categoryName then
-                    table.remove(list, i)
-                    n = n - 1
-                else
-                    i = i + 1
-                end
-            end
-        end
-
-        if DoiteAurasDB.bucketDisabled then
-            DoiteAurasDB.bucketDisabled[categoryName] = nil
-        end
-    end
-end
 
 local function DA_BuildDisplayList(ordered)
     local groupedByName      = {}
@@ -1882,35 +1797,6 @@ local function FindSpellBookSlot(spellName)
         end
     end
     return nil
-end
-
--- Buff/Debuff check via tooltip
-local function FindPlayerBuff(name)
-    local i=1
-    while true do
-        local bname = GetBuffName("player", i, false)
-        if not bname then break end
-        if bname == name then
-            local tex = UnitBuff("player", i)
-            return true, tex
-        end
-        i=i+1
-    end
-    return false,nil
-end
-
-local function FindPlayerDebuff(name)
-    local i=1
-    while true do
-        local dname = GetBuffName("player", i, true)
-        if not dname then break end
-        if dname == name then
-            local tex = UnitDebuff("player", i)
-            return true, tex
-        end
-        i=i+1
-    end
-    return false,nil
 end
 
 -- Helper: Use item by name scanning bags/inventory
@@ -3639,12 +3525,6 @@ local function DA_GetVersion_Safe()
   end
   local v = (GetAddOnMetadata and GetAddOnMetadata("DoiteAuras", "Version")) or (DoiteAuras_Version) or "?"
   return v or "?"
-end
-
--- Broadcast helpers
-local function DA_BroadcastVersion(channel)
-  if not SendAddonMessage then return end
-  SendAddonMessage(DA_PREFIX, "DA_VER:" .. tostring(DA_GetVersion_Safe()), channel)
 end
 
 local function DA_BroadcastVersionAll()

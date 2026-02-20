@@ -41,6 +41,54 @@ local function _IsRogueOrDruid()
   return (c == "ROGUE" or c == "DRUID")
 end
 
+local function DoiteEdit_YellowifyButton(btn)
+  if not btn then
+    return
+  end
+  if btn.SetNormalFontObject then
+    btn:SetNormalFontObject("GameFontNormalSmall")
+  end
+  local fs = btn:GetFontString()
+  if fs and fs.SetTextColor then
+    fs:SetTextColor(1, 0.82, 0)
+  end
+end
+
+local function DoiteEdit_EnableCheck(cb)
+  if not cb then
+    return
+  end
+  cb:Enable()
+  if cb.text and cb.text.SetTextColor then
+    cb.text:SetTextColor(1, 0.82, 0)
+  end
+end
+
+local function DoiteEdit_DisableCheck(cb)
+  if not cb then
+    return
+  end
+  cb:Disable()
+  if cb.text and cb.text.SetTextColor then
+    cb.text:SetTextColor(0.6, 0.6, 0.6)
+  end
+end
+
+local function DoiteEdit_AddGroupModeOption(typeKey, text, value)
+  local info = UIDropDownMenu_CreateInfo()
+  info.text = text
+  info.value = value
+  info.func = function(button)
+    local v = (button and button.value) or value
+    if v == "__default" then
+      SetGroupMode(typeKey, nil)
+    else
+      SetGroupMode(typeKey, v)
+    end
+  end
+  UIDropDownMenu_AddButton(info)
+end
+
 -- === Lightweight throttle for heavy UI work (prevents lag while dragging sliders) ===
 local _DoiteEdit_PendingHeavy = false
 local _DoiteEdit_Accum = 0
@@ -1579,27 +1627,11 @@ local function CreateConditionsUI()
 
     ClearDropdown(condFrame.cond_ability_groupingDD)
     UIDropDownMenu_Initialize(condFrame.cond_ability_groupingDD, function(frame, level, menuList)
-      local dd = condFrame.cond_ability_groupingDD
-      local function _Add(text, value)
-        local info = UIDropDownMenu_CreateInfo()
-        info.text = text
-        info.value = value
-        info.func = function(button)
-          local v = (button and button.value) or value
-          if v == "__default" then
-            SetGroupMode("ability", nil)
-          else
-            SetGroupMode("ability", v)
-          end
-        end
-        UIDropDownMenu_AddButton(info)
-      end
-
-      _Add("Any", "any")
-      _Add("Not in group", "nogroup")
-      _Add("In party", "party")
-      _Add("In raid", "raid")
-      _Add("In party or raid", "partyraid")
+      DoiteEdit_AddGroupModeOption("ability", "Any", "any")
+      DoiteEdit_AddGroupModeOption("ability", "Not in group", "nogroup")
+      DoiteEdit_AddGroupModeOption("ability", "In party", "party")
+      DoiteEdit_AddGroupModeOption("ability", "In raid", "raid")
+      DoiteEdit_AddGroupModeOption("ability", "In party or raid", "partyraid")
     end)
   end
 
@@ -1743,27 +1775,11 @@ local function CreateConditionsUI()
 
     ClearDropdown(condFrame.cond_aura_groupingDD)
     UIDropDownMenu_Initialize(condFrame.cond_aura_groupingDD, function(frame, level, menuList)
-      local dd = condFrame.cond_aura_groupingDD
-      local function _Add(text, value)
-        local info = UIDropDownMenu_CreateInfo()
-        info.text = text
-        info.value = value
-        info.func = function(button)
-          local v = (button and button.value) or value
-          if v == "__default" then
-            SetGroupMode("aura", nil)
-          else
-            SetGroupMode("aura", v)
-          end
-        end
-        UIDropDownMenu_AddButton(info)
-      end
-
-      _Add("Any", "any")
-      _Add("Not in group", "nogroup")
-      _Add("In party", "party")
-      _Add("In raid", "raid")
-      _Add("In party or raid", "partyraid")
+      DoiteEdit_AddGroupModeOption("aura", "Any", "any")
+      DoiteEdit_AddGroupModeOption("aura", "Not in group", "nogroup")
+      DoiteEdit_AddGroupModeOption("aura", "In party", "party")
+      DoiteEdit_AddGroupModeOption("aura", "In raid", "raid")
+      DoiteEdit_AddGroupModeOption("aura", "In party or raid", "partyraid")
     end)
   end
 
@@ -1951,27 +1967,11 @@ local function CreateConditionsUI()
 
     ClearDropdown(condFrame.cond_item_groupingDD)
     UIDropDownMenu_Initialize(condFrame.cond_item_groupingDD, function(frame, level, menuList)
-      local dd = condFrame.cond_item_groupingDD
-      local function _Add(text, value)
-        local info = UIDropDownMenu_CreateInfo()
-        info.text = text
-        info.value = value
-        info.func = function(button)
-          local v = (button and button.value) or value
-          if v == "__default" then
-            SetGroupMode("item", nil)
-          else
-            SetGroupMode("item", v)
-          end
-        end
-        UIDropDownMenu_AddButton(info)
-      end
-
-      _Add("Any", "any")
-      _Add("Not in group", "nogroup")
-      _Add("In party", "party")
-      _Add("In raid", "raid")
-      _Add("In party or raid", "partyraid")
+      DoiteEdit_AddGroupModeOption("item", "Any", "any")
+      DoiteEdit_AddGroupModeOption("item", "Not in group", "nogroup")
+      DoiteEdit_AddGroupModeOption("item", "In party", "party")
+      DoiteEdit_AddGroupModeOption("item", "In raid", "raid")
+      DoiteEdit_AddGroupModeOption("item", "In party or raid", "partyraid")
     end)
   end
 
@@ -5716,10 +5716,6 @@ do
     local closeWidth = row._closeWidth or 20
     local okWidth = row._okWidth or 20
   
-    -- keep old name used below, but make it safe (no rebuild)
-    local function UpdateStacksVisibility()
-      AuraCond_UpdateStacksUI(row)
-    end
   
     if state == "STEP1" then
       row._branch = nil
@@ -5833,7 +5829,7 @@ do
         row.stacksValEnter:SetPoint("LEFT", row.stacksVal, "RIGHT", 4, 0)
       end
   
-      UpdateStacksVisibility()
+      AuraCond_UpdateStacksUI(row)
   
     elseif state == "INPUT" then
       local addWidth = row.addButton:GetWidth() or 40
@@ -6271,25 +6267,12 @@ do
 
     row.closeBtn:SetText("X")
 
-    local function YellowifyButton(btn)
-      if not btn then
-        return
-      end
-      if btn.SetNormalFontObject then
-        btn:SetNormalFontObject("GameFontNormalSmall")
-      end
-      local fs = btn:GetFontString()
-      if fs and fs.SetTextColor then
-        fs:SetTextColor(1, 0.82, 0)
-      end
-    end
-
-    YellowifyButton(row.btn1)
-    YellowifyButton(row.btn2)
-    YellowifyButton(row.btn3)
-    YellowifyButton(row.addButton)
-    YellowifyButton(row.closeBtn)
-	YellowifyButton(row.okBtn)
+    DoiteEdit_YellowifyButton(row.btn1)
+    DoiteEdit_YellowifyButton(row.btn2)
+    DoiteEdit_YellowifyButton(row.btn3)
+    DoiteEdit_YellowifyButton(row.addButton)
+    DoiteEdit_YellowifyButton(row.closeBtn)
+	DoiteEdit_YellowifyButton(row.okBtn)
 
     -- progression buttons:
     row.btn1:SetScript("OnClick", function()
@@ -6661,13 +6644,6 @@ do
   end
 
 
-  local function VfxCond_Len(t)
-    if not t then return 0 end
-    local n = 0
-    for _ in pairs(t) do n = n + 1 end
-    return n
-  end
-
   local function VfxCond_TitleCase(str)
     if not str then
       return ""
@@ -6972,10 +6948,6 @@ do
     local parentWidth = row._parentWidth or 260
     local closeWidth = row._closeWidth or 20
   
-    local function UpdateStacksVisibility()
-      VfxCond_UpdateStacksUI(row)
-    end
-  
     if state == "STEP1" then
       row._branch = nil
       local available = parentWidth - closeWidth - spacing * 5
@@ -7088,7 +7060,7 @@ do
         row.stacksValEnter:SetPoint("LEFT", row.stacksVal, "RIGHT", 4, 0)
       end
   
-      UpdateStacksVisibility()
+      VfxCond_UpdateStacksUI(row)
   
     elseif state == "INPUT" then
       local addWidth = row.addButton:GetWidth() or 40
@@ -7510,19 +7482,12 @@ do
 
     row.closeBtn:SetText("X")
 
-    local function YellowifyButton(btn)
-      if not btn then return end
-      if btn.SetNormalFontObject then btn:SetNormalFontObject("GameFontNormalSmall") end
-      local fs = btn:GetFontString()
-      if fs and fs.SetTextColor then fs:SetTextColor(1, 0.82, 0) end
-    end
-
-	YellowifyButton(row.btn1)
-	YellowifyButton(row.btn2)
-	YellowifyButton(row.btn3)
-	YellowifyButton(row.addButton)
-	YellowifyButton(row.closeBtn)
-	YellowifyButton(row.okBtn)
+	DoiteEdit_YellowifyButton(row.btn1)
+	DoiteEdit_YellowifyButton(row.btn2)
+	DoiteEdit_YellowifyButton(row.btn3)
+	DoiteEdit_YellowifyButton(row.addButton)
+	DoiteEdit_YellowifyButton(row.closeBtn)
+	DoiteEdit_YellowifyButton(row.okBtn)
 
     -- Button click handlers
     row.btn1:SetScript("OnClick", function()
@@ -8133,36 +8098,24 @@ local function UpdateConditionsUI(data)
     end
 
     -- Row 10: Text flag (time remaining only; abilities never have a stack text)
-    local function _enableCheck(cb)
-      cb:Enable()
-      if cb.text and cb.text.SetTextColor then
-        cb.text:SetTextColor(1, 0.82, 0)
-      end
-    end
-    local function _disableCheck(cb)
-      cb:Disable()
-      if cb.text and cb.text.SetTextColor then
-        cb.text:SetTextColor(0.6, 0.6, 0.6)
-      end
-    end
 
     -- Time remaining behaves as before (gated by slider when mode is usable/notcd; shown on 'oncd')
     if mode == "oncd" then
       condFrame.cond_ability_text_time:Show()
-      _enableCheck(condFrame.cond_ability_text_time)
+      DoiteEdit_EnableCheck(condFrame.cond_ability_text_time)
       condFrame.cond_ability_text_time:SetChecked((c.ability and c.ability.textTimeRemaining) or false)
 
     elseif mode == "usable" or mode == "notcd" then
       condFrame.cond_ability_text_time:Show()
       if slidEnabled then
-        _enableCheck(condFrame.cond_ability_text_time)
+        DoiteEdit_EnableCheck(condFrame.cond_ability_text_time)
         condFrame.cond_ability_text_time:SetChecked((c.ability and c.ability.textTimeRemaining) or false)
       else
         if c.ability and c.ability.textTimeRemaining then
           c.ability.textTimeRemaining = false
         end
         condFrame.cond_ability_text_time:SetChecked(false)
-        _disableCheck(condFrame.cond_ability_text_time)
+        DoiteEdit_DisableCheck(condFrame.cond_ability_text_time)
       end
     else
       condFrame.cond_ability_text_time:Hide()
@@ -9330,18 +9283,6 @@ local ic = c.item or {}
     end
 
     -- small helpers used in this branch only
-    local function _enableCheck(cb)
-      cb:Enable()
-      if cb.text and cb.text.SetTextColor then
-        cb.text:SetTextColor(1, 0.82, 0)
-      end
-    end
-    local function _disableCheck(cb)
-      cb:Disable()
-      if cb.text and cb.text.SetTextColor then
-        cb.text:SetTextColor(0.6, 0.6, 0.6)
-      end
-    end
     local function _enableDD(dd)
       if not dd then
         return
@@ -9692,7 +9633,7 @@ local ic = c.item or {}
     if amode == "found" then
       -- === Text: Stack counter ===
       condFrame.cond_aura_text_stack:Show()
-      _enableCheck(condFrame.cond_aura_text_stack)
+      DoiteEdit_EnableCheck(condFrame.cond_aura_text_stack)
       condFrame.cond_aura_text_stack:SetChecked((c.aura and c.aura.textStackCounter) or false)
 
       -- === Text: Time remaining ===
@@ -9700,13 +9641,13 @@ local ic = c.item or {}
 
       if isSelfOnly then
         -- On Player (self): user may freely toggle Text: Remaining
-        _enableCheck(condFrame.cond_aura_text_time)
+        DoiteEdit_EnableCheck(condFrame.cond_aura_text_time)
         condFrame.cond_aura_text_time:SetChecked((c.aura and c.aura.textTimeRemaining) or false)
 
       elseif isHelpOrHarm then
         if onlyMine then
           -- My Aura checked -> user controls Text: Remaining
-          _enableCheck(condFrame.cond_aura_text_time)
+          DoiteEdit_EnableCheck(condFrame.cond_aura_text_time)
           condFrame.cond_aura_text_time:SetChecked((c.aura and c.aura.textTimeRemaining) or false)
         else
           -- My Aura NOT checked -> Text: Remaining forced OFF and greyed
@@ -9714,11 +9655,11 @@ local ic = c.item or {}
             c.aura.textTimeRemaining = false
           end
           condFrame.cond_aura_text_time:SetChecked(false)
-          _disableCheck(condFrame.cond_aura_text_time)
+          DoiteEdit_DisableCheck(condFrame.cond_aura_text_time)
         end
       else
         -- Fallback: disable
-        _disableCheck(condFrame.cond_aura_text_time)
+        DoiteEdit_DisableCheck(condFrame.cond_aura_text_time)
         condFrame.cond_aura_text_time:SetChecked(false)
         if c.aura and c.aura.textTimeRemaining then
           c.aura.textTimeRemaining = false
@@ -9730,8 +9671,8 @@ local ic = c.item or {}
       condFrame.cond_aura_text_stack:Show()
       condFrame.cond_aura_text_time:Show()
 
-      _disableCheck(condFrame.cond_aura_text_stack)
-      _disableCheck(condFrame.cond_aura_text_time)
+      DoiteEdit_DisableCheck(condFrame.cond_aura_text_stack)
+      DoiteEdit_DisableCheck(condFrame.cond_aura_text_time)
 
       condFrame.cond_aura_text_stack:SetChecked(false)
       condFrame.cond_aura_text_time:SetChecked(false)
@@ -9804,14 +9745,14 @@ local ic = c.item or {}
 
       if isSelfOnly then
         -- On Player (self): user can freely toggle Remaining
-        _enableCheck(condFrame.cond_aura_remaining_cb)
+        DoiteEdit_EnableCheck(condFrame.cond_aura_remaining_cb)
         condFrame.cond_aura_remaining_cb:SetChecked(aRemEnabled)
 
       elseif isHelpOrHarm then
         -- Help/Harm target: apply My Aura rules
         if onlyMine then
           -- My Aura checked -> user controls Remaining
-          _enableCheck(condFrame.cond_aura_remaining_cb)
+          DoiteEdit_EnableCheck(condFrame.cond_aura_remaining_cb)
           condFrame.cond_aura_remaining_cb:SetChecked(aRemEnabled)
         else
           -- My Aura NOT checked -> Remaining disabled and cleared
@@ -9820,11 +9761,11 @@ local ic = c.item or {}
           end
           aRemEnabled = false
           condFrame.cond_aura_remaining_cb:SetChecked(false)
-          _disableCheck(condFrame.cond_aura_remaining_cb)
+          DoiteEdit_DisableCheck(condFrame.cond_aura_remaining_cb)
         end
       else
         -- Fallback: disable
-        _disableCheck(condFrame.cond_aura_remaining_cb)
+        DoiteEdit_DisableCheck(condFrame.cond_aura_remaining_cb)
         condFrame.cond_aura_remaining_cb:SetChecked(false)
         if c.aura then
           c.aura.remainingEnabled = false
@@ -9855,7 +9796,7 @@ local ic = c.item or {}
         condFrame.cond_aura_remaining_cb.text:SetText("Remaining")
       end
 
-      _disableCheck(condFrame.cond_aura_remaining_cb)
+      DoiteEdit_DisableCheck(condFrame.cond_aura_remaining_cb)
       condFrame.cond_aura_remaining_cb:SetChecked(false)
       if c.aura then
         c.aura.remainingEnabled = false
@@ -9871,7 +9812,7 @@ local ic = c.item or {}
     condFrame.cond_aura_stacks_cb:SetChecked(aStacksEnabled)
     if amode == "found" then
       condFrame.cond_aura_stacks_cb:Show()
-      _enableCheck(condFrame.cond_aura_stacks_cb)
+      DoiteEdit_EnableCheck(condFrame.cond_aura_stacks_cb)
       if aStacksEnabled then
         condFrame.cond_aura_stacks_comp:Show()
         condFrame.cond_aura_stacks_val:Show()
@@ -9890,7 +9831,7 @@ local ic = c.item or {}
       -- Aura missing or no mode: show but disabled/cleared for MISSING, hide for nil-mode
       if amode == "missing" then
         condFrame.cond_aura_stacks_cb:Show()
-        _disableCheck(condFrame.cond_aura_stacks_cb)
+        DoiteEdit_DisableCheck(condFrame.cond_aura_stacks_cb)
         condFrame.cond_aura_stacks_cb:SetChecked(false)
         if c.aura then
           c.aura.stacksEnabled = false
