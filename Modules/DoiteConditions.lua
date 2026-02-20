@@ -5096,7 +5096,8 @@ local function CheckAuraConditions(data)
         found = false
       elseif ownerFilter == "mine" and not isMine then
         found = false
-      elseif ownerFilter == "others" and not isOther then
+      elseif ownerFilter == "others" and ((not isOther) or isMine) then
+        -- If ownership is mixed/ambiguous, prefer onlyMine over onlyOthers.
         found = false
       end
     end
