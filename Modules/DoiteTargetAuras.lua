@@ -456,7 +456,11 @@ BuffAddedOtherFrame:SetScript("OnEvent", function()
   cache.lastSeenTime = GetTime()
 
   if guid == DoiteTargetAuras.targetGuid then
-    SetActiveCache(cache)
+    -- Ownership swaps/refreshes can arrive as compact event sequences where
+    -- slot-level deltas are ambiguous (especially for same-name debuffs).
+    -- Rebuild from the authoritative target aura array to avoid stale
+    -- activeDebuffs/activeBuffs state that can hide icons until a later reset.
+    UpdateAuras()
     NotifyConditionsChanged()
   end
 end)
@@ -500,7 +504,8 @@ BuffRemovedOtherFrame:SetScript("OnEvent", function()
   cache.lastSeenTime = GetTime()
 
   if guid == DoiteTargetAuras.targetGuid then
-    SetActiveCache(cache)
+    -- Keep cache state authoritative during overwrite/replacement sequences.
+    UpdateAuras()
     NotifyConditionsChanged()
   end
 
@@ -542,7 +547,8 @@ DebuffAddedOtherFrame:SetScript("OnEvent", function()
   cache.lastSeenTime = GetTime()
 
   if guid == DoiteTargetAuras.targetGuid then
-    SetActiveCache(cache)
+    -- Keep cache state authoritative during overwrite/replacement sequences.
+    UpdateAuras()
     NotifyConditionsChanged()
   end
 end)
@@ -586,7 +592,8 @@ DebuffRemovedOtherFrame:SetScript("OnEvent", function()
   cache.lastSeenTime = GetTime()
 
   if guid == DoiteTargetAuras.targetGuid then
-    SetActiveCache(cache)
+    -- Keep cache state authoritative during overwrite/replacement sequences.
+    UpdateAuras()
     NotifyConditionsChanged()
   end
 end)
