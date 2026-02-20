@@ -345,18 +345,10 @@ function DoiteTargetAuras.HasBuffSpellId(spellId)
     end
   end
 
-  local spellName = DoiteTargetAuras.spellIdToNameCache[spellId]
-  if not spellName then
-    spellName = GetSpellRecField(spellId, "name")
-    if spellName then
-      DoiteTargetAuras.spellIdToNameCache[spellId] = spellName
-      DoiteTargetAuras.spellNameToIdCache[spellName] = spellId
-    end
-  end
-  if not spellName then
-    return false
-  end
-  return DoiteTargetAuras.HasBuff(spellName)
+  -- IMPORTANT: this API must stay spellId-exact.
+  -- Falling back to HasBuff(name) turns rank/name aliases into false positives,
+  -- which can classify a single aura as both "mine" and "other".
+  return false
 end
 
 function DoiteTargetAuras.HasDebuffSpellId(spellId)
@@ -368,18 +360,8 @@ function DoiteTargetAuras.HasDebuffSpellId(spellId)
     end
   end
 
-  local spellName = DoiteTargetAuras.spellIdToNameCache[spellId]
-  if not spellName then
-    spellName = GetSpellRecField(spellId, "name")
-    if spellName then
-      DoiteTargetAuras.spellIdToNameCache[spellId] = spellName
-      DoiteTargetAuras.spellNameToIdCache[spellName] = spellId
-    end
-  end
-  if not spellName then
-    return false
-  end
-  return DoiteTargetAuras.HasDebuff(spellName)
+  -- Keep spellId checks exact for the same reason as HasBuffSpellId.
+  return false
 end
 
 function DoiteTargetAuras.GetHiddenBuffRemaining(spellName)
