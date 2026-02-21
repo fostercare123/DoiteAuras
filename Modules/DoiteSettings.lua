@@ -213,12 +213,173 @@ local function DS_CreateSettingsFrame()
 
     DS_UpdateItemTooltipButton()
 
+    ---------------------------------------------------------------
+    -- DEBUG section (bottom-anchored)
+    ---------------------------------------------------------------
+    -- "DEBUG" header text above a separator line above the top debug button
+    local debugHeader = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    debugHeader:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 78)
+    debugHeader:SetText("DEBUG")
+	if debugHeader.SetTextColor then
+		debugHeader:SetTextColor(1, 1, 1)
+	end
+
+    local debugSep = f:CreateTexture(nil, "ARTWORK")
+    debugSep:SetHeight(1)
+    debugSep:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 70)
+    debugSep:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -20, 70)
+    debugSep:SetTexture(1, 1, 1)
+    if debugSep.SetVertexColor then
+        debugSep:SetVertexColor(1, 1, 1, 0.25)
+    end
+
+    -- Bottom button: Overcap simulation
+    local overcapBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    overcapBtn:SetWidth(120)
+    overcapBtn:SetHeight(20)
+    overcapBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 20, 20)
+
+    -- Top button: Spell cast debug
+    local spellCastDebugBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    spellCastDebugBtn:SetWidth(120)
+    spellCastDebugBtn:SetHeight(20)
+    spellCastDebugBtn:SetPoint("BOTTOMLEFT", overcapBtn, "TOPLEFT", 0, 5)
+
+    local function DS_GetSpellCastDebugState()
+        -- Prefer authoritative global if available
+        if _G["DoiteTrack_NPDebug"] then
+            return true
+        end
+        return false
+    end
+
+    local function DS_SetSpellCastDebugState(wantOn)
+        local fn = _G["DoiteTrack_SetNPDebug"]
+        if type(fn) == "function" then
+            fn(wantOn and true or false)
+            return true
+        end
+        return false
+    end
+
+    local function DS_UpdateSpellCastDebugButton()
+        local on = DS_GetSpellCastDebugState()
+
+        if on then
+            spellCastDebugBtn:SetText("Spell cast: ON")
+        else
+            spellCastDebugBtn:SetText("Spell cast: OFF")
+        end
+
+        -- Enable only if toggle function exists
+        if type(_G["DoiteTrack_SetNPDebug"]) ~= "function" then
+            if spellCastDebugBtn.Disable then spellCastDebugBtn:Disable() end
+            local fs = spellCastDebugBtn.GetFontString and spellCastDebugBtn:GetFontString()
+            if fs and fs.SetTextColor then
+                fs:SetTextColor(0.6, 0.6, 0.6)
+            end
+        else
+            if spellCastDebugBtn.Enable then spellCastDebugBtn:Enable() end
+            local fs = spellCastDebugBtn.GetFontString and spellCastDebugBtn:GetFontString()
+            if fs and fs.SetTextColor then
+                fs:SetTextColor(1, 0.82, 0)
+            end
+        end
+    end
+
+    spellCastDebugBtn:SetScript("OnClick", function()
+        local cur = DS_GetSpellCastDebugState()
+        local ok = DS_SetSpellCastDebugState(not cur)
+        if not ok then
+            local cf = (DEFAULT_CHAT_FRAME or ChatFrame1)
+            if cf then
+                cf:AddMessage("|cff6FA8DCDoiteSettings:|r debug toggle not available (DoiteTrack not loaded?).")
+            end
+            return
+        end
+        DS_UpdateSpellCastDebugButton()
+    end)
+
+    local function DS_GetOvercapSimState()
+        local on = false
+        if DoitePlayerAuras and DoitePlayerAuras.debugBuffCap then
+            on = true
+        end
+        if DoiteTargetAuras and DoiteTargetAuras.debugBuffCap then
+            on = true
+        end
+        return on
+    end
+
+    local function DS_CanToggleOvercapSim()
+        if DoitePlayerAuras and type(DoitePlayerAuras.ToggleDebugBuffCap) == "function" then
+            return true
+        end
+        if DoiteTargetAuras and type(DoiteTargetAuras.ToggleDebugBuffCap) == "function" then
+            return true
+        end
+        return false
+    end
+
+    local function DS_UpdateOvercapButton()
+        local on = DS_GetOvercapSimState()
+
+        if on then
+            overcapBtn:SetText("Aura cap. sim.: ON")
+        else
+            overcapBtn:SetText("Aura cap. sim.: OFF")
+        end
+
+        if not DS_CanToggleOvercapSim() then
+            if overcapBtn.Disable then overcapBtn:Disable() end
+            local fs = overcapBtn.GetFontString and overcapBtn:GetFontString()
+            if fs and fs.SetTextColor then
+                fs:SetTextColor(0.6, 0.6, 0.6)
+            end
+        else
+            if overcapBtn.Enable then overcapBtn:Enable() end
+            local fs = overcapBtn.GetFontString and overcapBtn:GetFontString()
+            if fs and fs.SetTextColor then
+                fs:SetTextColor(1, 0.82, 0)
+            end
+        end
+    end
+
+    overcapBtn:SetScript("OnClick", function()
+        local okAny = false
+
+        if DoitePlayerAuras and type(DoitePlayerAuras.ToggleDebugBuffCap) == "function" then
+            DoitePlayerAuras.ToggleDebugBuffCap()
+            okAny = true
+        end
+        if DoiteTargetAuras and type(DoiteTargetAuras.ToggleDebugBuffCap) == "function" then
+            DoiteTargetAuras.ToggleDebugBuffCap()
+            okAny = true
+        end
+
+        if not okAny then
+            local cf = (DEFAULT_CHAT_FRAME or ChatFrame1)
+            if cf then
+                cf:AddMessage("|cff6FA8DCDoiteSettings:|r overcap simulation toggle not available.")
+            end
+            return
+        end
+
+        DS_UpdateOvercapButton()
+    end)
+
+    -- Default OFF: do not auto-toggle anything here; just show current state.
+    DS_UpdateSpellCastDebugButton()
+    DS_UpdateOvercapButton()
+
     -- OnShow: enforce exclusivity + top-most
     f:SetScript("OnShow", function()
         DS_CloseOtherWindows()
         DS_MakeTopMost(f)
         DS_UpdatePfUIButton()
         DS_UpdateItemTooltipButton()
+        DS_UpdateSpellCastDebugButton()
+        DS_UpdateOvercapButton()
     end)
 
     DS_MakeTopMost(f)

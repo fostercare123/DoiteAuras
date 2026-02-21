@@ -517,8 +517,7 @@ function DoitePlayerAuras.ToggleDebugBuffCap()
     DebuffRemovedFrame:RegisterEvent("DEBUFF_REMOVED_SELF")
     DoitePlayerAuras.UnregisterBuffCapEvents()
     -- Refresh buff/debuff state
-    UpdateBuffs()
-    UpdateDebuffs()
+     UpdateAuras()
     print("DoitePlayerAuras: Debug buff cap disabled")
   end
 end

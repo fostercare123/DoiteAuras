@@ -45,6 +45,8 @@ local DoiteTargetAuras = {
   targetGuid = "",
 
   buffCapEventsEnabled = true,
+
+  debugBuffCap = false, -- when true: disable normal aura delta events; force aura-cast processing for testing
 }
 
 _G["DoiteTargetAuras"] = DoiteTargetAuras
@@ -641,8 +643,10 @@ AuraCastOtherFrame:SetScript("OnEvent", function()
     return
   end
 
-  if not (auraCapStatus == 1 or auraCapStatus == 3) then
-    return
+  if not DoiteTargetAuras.debugBuffCap then
+    if not (auraCapStatus == 1 or auraCapStatus == 3) then
+      return
+    end
   end
 
   local cache = GetGuidCache(targetGuid)
@@ -694,4 +698,43 @@ end
 
 function DoiteTargetAuras.UnregisterBuffCapEvents()
   DoiteTargetAuras.buffCapEventsEnabled = false
+end
+
+function DoiteTargetAuras.ToggleDebugBuffCap()
+  DoiteTargetAuras.debugBuffCap = not DoiteTargetAuras.debugBuffCap
+
+  if DoiteTargetAuras.debugBuffCap then
+    -- Enabling debug mode: stop consuming normal delta events so you can observe
+    -- "buff cap style" behavior driven by AURA_CAST_ON_OTHER handling.
+    BuffAddedOtherFrame:UnregisterEvent("BUFF_ADDED_OTHER")
+    BuffRemovedOtherFrame:UnregisterEvent("BUFF_REMOVED_OTHER")
+    DebuffAddedOtherFrame:UnregisterEvent("DEBUFF_ADDED_OTHER")
+    DebuffRemovedOtherFrame:UnregisterEvent("DEBUFF_REMOVED_OTHER")
+
+    -- If target is the player, *_OTHER doesn't fire; this frame refreshes from *_SELF events.
+    -- Disable it too for a cleaner test surface.
+    SelfAuraFrame:UnregisterEvent("BUFF_ADDED_SELF")
+    SelfAuraFrame:UnregisterEvent("BUFF_REMOVED_SELF")
+    SelfAuraFrame:UnregisterEvent("DEBUFF_ADDED_SELF")
+    SelfAuraFrame:UnregisterEvent("DEBUFF_REMOVED_SELF")
+
+    print("DoiteTargetAuras: Debug buff cap enabled - forcing AURA_CAST_ON_OTHER processing")
+  else
+    -- Disabling debug mode: restore normal events
+    BuffAddedOtherFrame:RegisterEvent("BUFF_ADDED_OTHER")
+    BuffRemovedOtherFrame:RegisterEvent("BUFF_REMOVED_OTHER")
+    DebuffAddedOtherFrame:RegisterEvent("DEBUFF_ADDED_OTHER")
+    DebuffRemovedOtherFrame:RegisterEvent("DEBUFF_REMOVED_OTHER")
+
+    SelfAuraFrame:RegisterEvent("BUFF_ADDED_SELF")
+    SelfAuraFrame:RegisterEvent("BUFF_REMOVED_SELF")
+    SelfAuraFrame:RegisterEvent("DEBUFF_ADDED_SELF")
+    SelfAuraFrame:RegisterEvent("DEBUFF_REMOVED_SELF")
+
+    -- Refresh authoritative aura snapshot
+    UpdateAuras()
+    NotifyConditionsChanged()
+
+    print("DoiteTargetAuras: Debug buff cap disabled")
+  end
 end
