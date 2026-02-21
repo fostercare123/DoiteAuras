@@ -477,27 +477,12 @@ local function _GetSpellNameByIdCached(spellId)
   return nil
 end
 
+-- SpellId-exact aura presence check.
+-- IMPORTANT: do NOT shortcut through DoiteTargetAuras/DoitePlayerAuras name-based maps, because that can return true for the wrong rank and incorrectly "confirm" ownership.
 local function _AuraHasSpellId(unit, spellId, isDebuff)
   spellId = tonumber(spellId) or 0
   if not unit or spellId <= 0 then
     return false
-  end
-
-  if unit == "target" and DoiteTargetAuras then
-    if isDebuff then
-      return DoiteTargetAuras.HasDebuffSpellId(spellId)
-    end
-    return DoiteTargetAuras.HasBuffSpellId(spellId)
-  end
-
-  if unit == "player" and DoitePlayerAuras then
-    local spellName = _GetSpellNameByIdCached(spellId)
-    if spellName then
-      if isDebuff then
-        return DoitePlayerAuras.HasDebuff(spellName)
-      end
-      return DoitePlayerAuras.HasBuff(spellName)
-    end
   end
 
   local auras = _GetUnitAuraTable(unit, isDebuff)
@@ -505,10 +490,12 @@ local function _AuraHasSpellId(unit, spellId, isDebuff)
     return false
   end
 
+  -- fast path: hash-style table
   if auras[spellId] then
     return true
   end
 
+  -- array-style table
   local n = table.getn(auras)
   if n and n > 0 then
     local i
@@ -519,13 +506,13 @@ local function _AuraHasSpellId(unit, spellId, isDebuff)
     end
   end
 
+  -- debuff overflow: sometimes debuffs spill into buff field when 16-cap is hit
   if isDebuff and n and n >= 16 then
     local buffs = _GetUnitAuraTable(unit, false)
     if type(buffs) == "table" then
       if buffs[spellId] then
         return true
       end
-
       local n2 = table.getn(buffs)
       if n2 and n2 > 0 then
         local j
@@ -1782,6 +1769,53 @@ function DoiteTrack:_OnAuraNPEvent()
     end
 
     local now = GetTime and GetTime() or 0
+
+    ----------------------------------------------------------------
+    -- Non-player apply overwrite guard:
+    -- If an *_ADDED_OTHER event confirms this spell was applied on guid and
+    -- player have no very-recent pending cast for guid+spell, clear stale
+    -- "mine" runtime state so ownership can flip to others immediately.
+    ----------------------------------------------------------------
+
+    if event == "BUFF_ADDED_OTHER" or event == "DEBUFF_ADDED_OTHER" then
+
+      -- Discover spellId ranks from OTHER applications too (name->entry wiring)
+      do
+        local n = _GetSpellNameRank(spellId)
+        local norm = _NormSpellName(n)
+        if norm then
+          local byN = TrackedByNameNorm[norm]
+          if byN then
+            byN.spellIds = byN.spellIds or {}
+            if not byN.spellIds[spellId] then
+              byN.spellIds[spellId] = true
+            end
+            if not TrackedBySpellId[spellId] then
+              TrackedBySpellId[spellId] = byN
+            end
+          end
+        end
+      end
+
+      local entryOther = TrackedBySpellId[spellId]
+      if entryOther and entryOther.onlyMine == true then
+        local pendOther = _GetPendingTable()
+        local tOther = pendOther[spellId]
+        local pOther = tOther and tOther[guid] or nil
+
+        local fromRecentPlayerCast = false
+        if pOther and pOther.t and (now - (pOther.t or now)) <= 2.5 then
+          fromRecentPlayerCast = true
+        end
+
+        if not fromRecentPlayerCast then
+          local bOther = AuraStateByGuid[guid]
+          if bOther then
+            bOther[spellId] = nil
+          end
+        end
+      end
+    end
 
     ----------------------------------------------------------------
     -- Paladin SC: confirm Judgement apply (do NOT rely on AURA_CAST_ON_OTHER)

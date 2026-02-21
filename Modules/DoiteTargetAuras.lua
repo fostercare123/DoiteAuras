@@ -264,7 +264,17 @@ function DoiteTargetAuras.HasBuff(spellName)
 end
 
 function DoiteTargetAuras.HasDebuff(spellName)
-  return DoiteTargetAuras.activeDebuffs[spellName] or false
+  -- Normal debuffs (auraSlots 32-47)
+  if DoiteTargetAuras.activeDebuffs[spellName] then
+    return true
+  end
+
+  -- Overflow debuffs can occupy buff auraSlots (0-31), meaning they appear in the buff cache even though they are semantically "debuffs".
+  if DoiteTargetAuras.activeBuffs[spellName] then
+    return true
+  end
+
+  return false
 end
 
 function DoiteTargetAuras.GetBuffStacks(spellName)
@@ -311,25 +321,40 @@ function DoiteTargetAuras.GetActiveAuraSlot(spellName)
 end
 
 function DoiteTargetAuras.GetDebuffStacks(spellName)
-  local cachedSlot = DoiteTargetAuras.activeDebuffs[spellName]
-  if not cachedSlot then
-    return nil
-  end
-
   local spellId = DoiteTargetAuras.spellNameToIdCache[spellName]
   if not spellId then
     return nil
   end
 
-  if DoiteTargetAuras.debuffs[cachedSlot] and DoiteTargetAuras.debuffs[cachedSlot].spellId == spellId then
-    return DoiteTargetAuras.debuffs[cachedSlot].stacks
+  -- 1) Prefer true debuff slots (auraSlots 32-47)
+  local cachedDebuffSlot = DoiteTargetAuras.activeDebuffs[spellName]
+  if cachedDebuffSlot then
+    if DoiteTargetAuras.debuffs[cachedDebuffSlot] and DoiteTargetAuras.debuffs[cachedDebuffSlot].spellId == spellId then
+      return DoiteTargetAuras.debuffs[cachedDebuffSlot].stacks
+    end
+
+    local i
+    for i = 1, MAX_DEBUFF_SLOTS do
+      local aura = DoiteTargetAuras.debuffs[i]
+      if aura and aura.spellId == spellId then
+        return aura.stacks
+      end
+    end
   end
 
-  local i
-  for i = 1, MAX_DEBUFF_SLOTS do
-    local aura = DoiteTargetAuras.debuffs[i]
-    if aura and aura.spellId == spellId then
-      return aura.stacks
+  -- 2) Overflow case: debuff stored in buff auraSlots (0-31) => present in buff cache
+  local cachedBuffSlot = DoiteTargetAuras.activeBuffs[spellName]
+  if cachedBuffSlot then
+    if DoiteTargetAuras.buffs[cachedBuffSlot] and DoiteTargetAuras.buffs[cachedBuffSlot].spellId == spellId then
+      return DoiteTargetAuras.buffs[cachedBuffSlot].stacks
+    end
+
+    local i
+    for i = 1, MAX_BUFF_SLOTS do
+      local aura = DoiteTargetAuras.buffs[i]
+      if aura and aura.spellId == spellId then
+        return aura.stacks
+      end
     end
   end
 
@@ -346,8 +371,7 @@ function DoiteTargetAuras.HasBuffSpellId(spellId)
   end
 
   -- IMPORTANT: this API must stay spellId-exact.
-  -- Falling back to HasBuff(name) turns rank/name aliases into false positives,
-  -- which can classify a single aura as both "mine" and "other".
+  -- Falling back to HasBuff(name) turns rank/name aliases into false positives, which can classify a single aura as both "mine" and "other".
   return false
 end
 
@@ -360,7 +384,14 @@ function DoiteTargetAuras.HasDebuffSpellId(spellId)
     end
   end
 
-  -- Keep spellId checks exact for the same reason as HasBuffSpellId.
+  -- Overflow: debuffs can occupy buff auraSlots (0-31), so they may only be present in the buff cache.
+  for i = 1, MAX_BUFF_SLOTS do
+    local aura = DoiteTargetAuras.buffs[i]
+    if aura and aura.spellId == spellId then
+      return true
+    end
+  end
+
   return false
 end
 
