@@ -738,3 +738,44 @@ function DoiteTargetAuras.ToggleDebugBuffCap()
     print("DoiteTargetAuras: Debug buff cap disabled")
   end
 end
+
+-- Debug helpers: counts for UI display. These counts are "client visible + tracked hidden-by-cap buffs".
+function DoiteTargetAuras.GetVisibleAuraCounts()
+  local buffCount = 0
+  local debuffCount = 0
+  local i, aura
+
+  for i = 1, MAX_BUFF_SLOTS do
+    aura = DoiteTargetAuras.buffs[i]
+    if aura and aura.spellId and aura.spellId ~= 0 then
+      buffCount = buffCount + 1
+    end
+  end
+
+  for i = 1, MAX_DEBUFF_SLOTS do
+    aura = DoiteTargetAuras.debuffs[i]
+    if aura and aura.spellId and aura.spellId ~= 0 then
+      debuffCount = debuffCount + 1
+    end
+  end
+
+  return buffCount, debuffCount
+end
+
+function DoiteTargetAuras.GetTrackedHiddenBuffCount()
+  local now = GetTime()
+  local count = 0
+  local _, expiration
+  for _, expiration in pairs(DoiteTargetAuras.cappedBuffsExpirationTime) do
+    if expiration and expiration > now then
+      count = count + 1
+    end
+  end
+  return count
+end
+
+function DoiteTargetAuras.GetAuraCountSummary()
+  local buffs, debuffs = DoiteTargetAuras.GetVisibleAuraCounts()
+  local hidden = DoiteTargetAuras.GetTrackedHiddenBuffCount()
+  return buffs, debuffs, hidden, (buffs + debuffs + hidden)
+end
