@@ -506,8 +506,10 @@ local function _AuraHasSpellId(unit, spellId, isDebuff)
     end
   end
 
-  -- debuff overflow: sometimes debuffs spill into buff field when 16-cap is hit
-  if isDebuff and n and n >= 16 then
+  -- debuff overflow: overflow debuffs can remain in buff-facing fields even when
+  -- the visible debuff list drops below 16 (slots do not backfill/reclassify).
+  -- Always probe buff-facing fields for spellId-exact presence when querying a debuff.
+  if isDebuff then
     local buffs = _GetUnitAuraTable(unit, false)
     if type(buffs) == "table" then
       if buffs[spellId] then
