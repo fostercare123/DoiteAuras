@@ -506,8 +506,6 @@ local function _AuraHasSpellId(unit, spellId, isDebuff)
     end
   end
 
-  -- debuff overflow: overflow debuffs can remain in buff-facing fields even when
-  -- the visible debuff list drops below 16 (slots do not backfill/reclassify).
   -- Always probe buff-facing fields for spellId-exact presence when querying a debuff.
   if isDebuff then
     local buffs = _GetUnitAuraTable(unit, false)
@@ -2533,9 +2531,6 @@ function DoiteTrack:GetAuraRemainingSecondsByName(spellName, unit)
         end
       end
     else
-      -- Do not clear state here: aura visibility can flicker between scans
-      -- (or coexist with same-name casts by different owners). Let expiry
-      -- logic decide staleness instead of hard-clearing on a single miss.
     end
   end
 
@@ -2606,8 +2601,7 @@ function DoiteTrack:GetAuraOwnershipByName(spellName, unit)
         hasOther = true
       end
     else
-      -- Same reasoning as GetAuraRemainingSecondsByName: avoid destructive
-      -- clear on transient miss; preserve mine timer until it truly expires.
+      -- Same reasoning as GetAuraRemainingSecondsByName: avoid destructive clear on transient miss; preserve mine timer until it truly expires.
     end
   end
 
