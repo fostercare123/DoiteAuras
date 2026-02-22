@@ -181,10 +181,10 @@ end
 local function DA_GetMissingRequiredMods()
   local missing = {}
 
-  -- Nampower: must be >= 2.25.0
+  -- Nampower: must be >= the version in _NP_REQ_MAJOR/_NP_REQ_MINOR/_NP_REQ_PATCH
   local npOK, npVerStr = _NP_AtLeast(_NP_REQ_MAJOR, _NP_REQ_MINOR, _NP_REQ_PATCH)
   if not npOK then
-    table.insert(missing, "Nampower 2.25.0+ (you have " .. tostring(npVerStr) .. ")")
+    table.insert(missing, "Nampower 2.40.0+ (you have " .. tostring(npVerStr) .. ")")
   end
 
   -- UnitXP SP3: pcall(UnitXP, "nop", "nop") must succeed
@@ -197,12 +197,6 @@ local function DA_GetMissingRequiredMods()
   end
   if not hasUnitXP then
     table.insert(missing, "UnitXP SP3")
-  end
-  
-  -- SuperWoW: SUPERWOW_VERSION must be a non-empty string
-  local hasSuper = (type(SUPERWOW_VERSION) == "string" and SUPERWOW_VERSION ~= "")
-  if not hasSuper then
-    table.insert(missing, "SuperWoW")
   end
 
   return missing
@@ -3819,7 +3813,7 @@ _daLoad:SetScript("OnEvent", function()
       else
         -- One or more missing → modern client requirement message
         local list = table.concat(missing, ", ")
-        cf:AddMessage("|cff6FA8DCDoiteAuras:|r This addon requires Nampower 2.25.0+, UnitXP SP3 and SuperWoW. Missing: " .. list .. ".")
+        cf:AddMessage("|cff6FA8DCDoiteAuras:|r This addon requires Nampower 2.25.0+ and UnitXP SP3. Missing: " .. list .. ".")
         -- BLOCKER: after printing the message, hard-disable the addon
         _G["DoiteAuras_HardDisabled"] = true
 
