@@ -3813,7 +3813,7 @@ _daLoad:SetScript("OnEvent", function()
       else
         -- One or more missing → modern client requirement message
         local list = table.concat(missing, ", ")
-        cf:AddMessage("|cff6FA8DCDoiteAuras:|r This addon requires Nampower 2.25.0+ and UnitXP SP3. Missing: " .. list .. ".")
+        cf:AddMessage("|cff6FA8DCDoiteAuras:|r This addon requires Nampower 2.40.0+ and UnitXP SP3. Missing: " .. list .. ".")
         -- BLOCKER: after printing the message, hard-disable the addon
         _G["DoiteAuras_HardDisabled"] = true
 

@@ -113,11 +113,29 @@ local function MarkActive(spellId, activeTable, slot)
   end
 end
 
-local function MarkInactive(spellId, activeTable)
+local function MarkInactive(spellId, activeTable, slotTable, maxSlots, removedSlot)
   local spellName = DoiteTargetAuras.spellIdToNameCache[spellId]
-  if spellName then
-    activeTable[spellName] = false
+  if not spellName then
+    return
   end
+
+  -- If we were not pointing at this slot, do nothing (stale/out-of-order removal).
+  if removedSlot and activeTable[spellName] ~= removedSlot then
+    return
+  end
+
+  -- Try to find another active instance of the same spellId and re-point to it.
+  local i
+  for i = 1, maxSlots do
+    local aura = slotTable[i]
+    if aura and aura.spellId == spellId then
+      activeTable[spellName] = i
+      return
+    end
+  end
+
+  -- No remaining instance found -> clear mapping.
+  activeTable[spellName] = nil
 end
 
 local function RemoveCappedBuff(spellName)
@@ -211,7 +229,7 @@ local function UpdateAuras()
     if spellId and spellId ~= 0 then
       DoiteTargetAuras.buffs[i] = { spellId = spellId, stacks = auraStacks[i] + 1 }
       MarkActive(spellId, DoiteTargetAuras.activeBuffs, i)
-      DoiteTargetAuras.numActiveBuffs = i
+      DoiteTargetAuras.numActiveBuffs = DoiteTargetAuras.numActiveBuffs + 1
     else
       DoiteTargetAuras.buffs[i] = nil
     end
@@ -223,7 +241,7 @@ local function UpdateAuras()
     if spellId and spellId ~= 0 then
       DoiteTargetAuras.debuffs[i] = { spellId = spellId, stacks = auraStacks[auraIndex] + 1 }
       MarkActive(spellId, DoiteTargetAuras.activeDebuffs, i)
-      DoiteTargetAuras.numActiveDebuffs = i
+      DoiteTargetAuras.numActiveDebuffs = DoiteTargetAuras.numActiveDebuffs + 1
     else
       DoiteTargetAuras.debuffs[i] = nil
     end
@@ -261,19 +279,48 @@ function DoiteTargetAuras.IsActive(spellName)
 end
 
 function DoiteTargetAuras.HasBuff(spellName)
-  return DoiteTargetAuras.activeBuffs[spellName] or
-      DoiteTargetAuras.IsHiddenByBuffCap(spellName)
-end
-
-function DoiteTargetAuras.HasDebuff(spellName)
-  -- Normal debuffs (auraSlots 32-47)
-  if DoiteTargetAuras.activeDebuffs[spellName] then
+  if DoiteTargetAuras.IsHiddenByBuffCap(spellName) then
     return true
   end
 
-  -- Overflow debuffs can occupy buff auraSlots (0-31), meaning they appear in the buff cache even though they are semantically "debuffs".
-  if DoiteTargetAuras.activeBuffs[spellName] then
-    return true
+  local spellId = DoiteTargetAuras.spellNameToIdCache[spellName]
+  if not spellId then
+    return false
+  end
+
+  local i, aura
+  for i = 1, MAX_BUFF_SLOTS do
+    aura = DoiteTargetAuras.buffs[i]
+    if aura and aura.spellId == spellId then
+      return true
+    end
+  end
+
+  return false
+end
+
+function DoiteTargetAuras.HasDebuff(spellName)
+  local spellId = DoiteTargetAuras.spellNameToIdCache[spellName]
+  if not spellId then
+    return false
+  end
+
+  local i, aura
+
+  -- True debuff slots (auraSlots 32-47)
+  for i = 1, MAX_DEBUFF_SLOTS do
+    aura = DoiteTargetAuras.debuffs[i]
+    if aura and aura.spellId == spellId then
+      return true
+    end
+  end
+
+  -- Overflow debuffs may live in buff auraSlots 0-31
+  for i = 1, MAX_BUFF_SLOTS do
+    aura = DoiteTargetAuras.buffs[i]
+    if aura and aura.spellId == spellId then
+      return true
+    end
   end
 
   return false
@@ -433,6 +480,25 @@ SelfAuraFrame:SetScript("OnEvent", function()
   NotifyConditionsChanged()
 end)
 
+-- Fallback: if NP delta events are missed/suppressed, UNIT_AURA still fires. This keeps the authoritative snapshot correct for the current target.
+local UnitAuraFrame = CreateFrame("Frame", "DoiteTargetAuras_UnitAura")
+UnitAuraFrame:RegisterEvent("UNIT_AURA")
+UnitAuraFrame:SetScript("OnEvent", function()
+  -- UNIT_AURA arg1 is the unit id (e.g. "target", "player")
+  if arg1 == "target" then
+    UpdateAuras()
+    NotifyConditionsChanged()
+    return
+  end
+
+  -- If player is the current target, and player's auras change, treat it like target aura change too.
+  if arg1 == "player" and IsCurrentTargetPlayer() then
+    UpdateAuras()
+    NotifyConditionsChanged()
+    return
+  end
+end)
+
 local UnitDiedFrame = CreateFrame("Frame", "DoiteTargetAuras_UnitDied")
 UnitDiedFrame:RegisterEvent("UNIT_DIED")
 UnitDiedFrame:SetScript("OnEvent", function()
@@ -524,7 +590,7 @@ BuffRemovedOtherFrame:SetScript("OnEvent", function()
   local slot = auraSlot + 1
   if state == 1 then
     cache.buffs[slot] = nil
-    MarkInactive(spellId, cache.activeBuffs)
+    MarkInactive(spellId, cache.activeBuffs, cache.buffs, MAX_BUFF_SLOTS, slot)
     cache.numActiveBuffs = cache.numActiveBuffs - 1
   else
     if cache.buffs[slot] then
@@ -554,12 +620,13 @@ DebuffAddedOtherFrame:SetScript("OnEvent", function()
   local spellId = arg3
   local stacks = arg4
   local auraSlot = arg6
+  local state = arg7
 
   if not guid or guid == "" then
     return
   end
 
-  if auraSlot < MAX_BUFF_SLOTS or auraSlot >= (MAX_BUFF_SLOTS + MAX_DEBUFF_SLOTS) then
+  if auraSlot == nil then
     return
   end
 
@@ -569,12 +636,31 @@ DebuffAddedOtherFrame:SetScript("OnEvent", function()
   end
   cache = cache or GetOrCreateGuidCache(guid)
 
-  local slot = auraSlot - MAX_BUFF_SLOTS + 1
-  cache.debuffs[slot] = { spellId = spellId, stacks = stacks }
-  MarkActive(spellId, cache.activeDebuffs, slot)
+  -- Normal debuffs: auraSlots 32-47
+  if auraSlot >= MAX_BUFF_SLOTS and auraSlot < (MAX_BUFF_SLOTS + MAX_DEBUFF_SLOTS) then
+    local slot = auraSlot - MAX_BUFF_SLOTS + 1
+    cache.debuffs[slot] = { spellId = spellId, stacks = stacks }
+    MarkActive(spellId, cache.activeDebuffs, slot)
 
-  if arg7 == 0 then
-    cache.numActiveDebuffs = cache.numActiveDebuffs + 1
+    if state == 0 then
+      cache.numActiveDebuffs = cache.numActiveDebuffs + 1
+    end
+
+  -- Overflow debuffs can live in buff auraSlots 0-31.
+  -- Some event paths may still report them via DEBUFF_* events with auraSlot in 0-31. Store them in the buff cache (because that's where the auraSlot actually is).
+  elseif auraSlot >= 0 and auraSlot < MAX_BUFF_SLOTS then
+    local slot = auraSlot + 1
+    cache.buffs[slot] = { spellId = spellId, stacks = stacks }
+    MarkActive(spellId, cache.activeBuffs, slot)
+
+    if state == 0 then
+      cache.numActiveBuffs = cache.numActiveBuffs + 1
+      if cache.numActiveBuffs >= MAX_BUFF_SLOTS then
+        DoiteTargetAuras.RegisterBuffCapEvents()
+      end
+    end
+  else
+    return
   end
 
   cache.lastSeenTime = GetTime()
@@ -599,7 +685,7 @@ DebuffRemovedOtherFrame:SetScript("OnEvent", function()
     return
   end
 
-  if auraSlot < MAX_BUFF_SLOTS or auraSlot >= (MAX_BUFF_SLOTS + MAX_DEBUFF_SLOTS) then
+  if auraSlot == nil then
     return
   end
 
@@ -609,25 +695,48 @@ DebuffRemovedOtherFrame:SetScript("OnEvent", function()
   end
   cache = cache or GetOrCreateGuidCache(guid)
 
-  local slot = auraSlot - MAX_BUFF_SLOTS + 1
-  if state == 1 then
-    cache.debuffs[slot] = nil
-    MarkInactive(spellId, cache.activeDebuffs)
-    cache.numActiveDebuffs = cache.numActiveDebuffs - 1
-  else
-    if cache.debuffs[slot] then
-      cache.debuffs[slot].stacks = stacks
-    else
-      cache.debuffs[slot] = { spellId = spellId, stacks = stacks }
+  -- Normal debuffs: auraSlots 32-47
+  if auraSlot >= MAX_BUFF_SLOTS and auraSlot < (MAX_BUFF_SLOTS + MAX_DEBUFF_SLOTS) then
+    local slot = auraSlot - MAX_BUFF_SLOTS + 1
+	if state == 1 then
+	  cache.debuffs[slot] = nil
+	  MarkInactive(spellId, cache.activeDebuffs, cache.debuffs, MAX_DEBUFF_SLOTS, slot)
+	  cache.numActiveDebuffs = cache.numActiveDebuffs - 1
+	else
+      if cache.debuffs[slot] then
+        cache.debuffs[slot].stacks = stacks
+      else
+        cache.debuffs[slot] = { spellId = spellId, stacks = stacks }
+      end
     end
+
+  -- Overflow debuffs reported via DEBUFF_* but living in buff auraSlots 0-31
+  elseif auraSlot >= 0 and auraSlot < MAX_BUFF_SLOTS then
+    local slot = auraSlot + 1
+	if state == 1 then
+	  cache.buffs[slot] = nil
+	  MarkInactive(spellId, cache.activeBuffs, cache.buffs, MAX_BUFF_SLOTS, slot)
+	  cache.numActiveBuffs = cache.numActiveBuffs - 1
+	else
+      if cache.buffs[slot] then
+        cache.buffs[slot].stacks = stacks
+      else
+        cache.buffs[slot] = { spellId = spellId, stacks = stacks }
+      end
+    end
+  else
+    return
   end
 
   cache.lastSeenTime = GetTime()
 
   if guid == DoiteTargetAuras.targetGuid then
-    -- Keep cache state authoritative during overwrite/replacement sequences.
     UpdateAuras()
     NotifyConditionsChanged()
+  end
+
+  if not HasAnyActiveCappedBuffs() then
+    DoiteTargetAuras.UnregisterBuffCapEvents()
   end
 end)
 
