@@ -1,8 +1,8 @@
 ## Interface: 11200
 ## Title: |cff6FA8DC[DoiteAuras]|r
-## Notes: Simplified WeakAuras-inspired addon
+## Notes: WeakAuras-light addon for vanilla by Doite.
 ## Author: Doite
-## Version: 1.5.2
+## Version: 1.5.3
 ## SavedVariablesPerCharacter: DoiteAurasDB
 
 DoiteAuras.lua
