@@ -1542,18 +1542,11 @@ local function DE_CreateImportFrame()
   importBtn:SetHeight(24)
   importBtn:SetPoint("TOP", boxContainer, "BOTTOM", 0, -2)
   importBtn:SetText("Import")
-  importBtn:SetScript("OnClick", function()
-    local text = importEditBox:GetText() or ""
+  -- Execute the actual import from a parsed package.
+  local function DE_DoImport(pkg)
     local chat = DEFAULT_CHAT_FRAME or ChatFrame1
 
-    if text == "" then
-      if chat then
-        chat:AddMessage("|cffff0000DoiteAuras:|r Nothing to import. Paste export text first.")
-      end
-      return
-    end
-
-    local res, err = DE_ImportFromString(text)
+    local res, err = DE_ImportPackage(pkg)
     if not res then
       if chat then
         chat:AddMessage("|cffff0000DoiteAuras:|r Import failed: " .. tostring(err or "unknown error"))
@@ -1605,23 +1598,142 @@ local function DE_CreateImportFrame()
       msg = "Imported " .. count .. " icons."
     end
 
-    -- Refresh DoiteAuras UI so new icons/groups appear immediately
     if DoiteAuras_RefreshList then
       pcall(DoiteAuras_RefreshList)
     end
     if DoiteAuras_RefreshIcons then
       pcall(DoiteAuras_RefreshIcons)
     end
-    -- Clear sort cache so imported sort modes take effect
     DoiteGroup.InvalidateSortCache()
 
     if chat then
       chat:AddMessage("|cff6FA8DCDoiteAuras:|r " .. msg)
     end
 
-    -- Close the import frame after a successful import
     if importFrame and importFrame.Hide then
       importFrame:Hide()
+    end
+  end
+
+  -- Check whether a parsed package contains any custom function source.
+  local function DE_PackageHasCustomCode(pkg)
+    if not pkg or not pkg.icons then
+      return false
+    end
+    local idx
+    for idx = 1, table.getn(pkg.icons) do
+      local rec = pkg.icons[idx]
+      if rec and rec.data then
+        local src = rec.data.customFunctionSource
+        if type(src) == "string" and src ~= "" then
+          return true
+        end
+      end
+    end
+    return false
+  end
+
+  -- Custom-code import confirmation dialog (created once, reused).
+  local importConfirmFrame
+  local importConfirmPkg  -- stashed package awaiting user decision
+
+  local function DE_EnsureImportConfirmFrame()
+    if importConfirmFrame then
+      return
+    end
+
+    importConfirmFrame = CreateFrame("Frame", "DoiteExport_ImportConfirmFrame", UIParent)
+    if importConfirmFrame.SetFrameStrata then
+      importConfirmFrame:SetFrameStrata("TOOLTIP")
+    end
+    if UIParent and UIParent.GetFrameLevel and importConfirmFrame.SetFrameLevel then
+      importConfirmFrame:SetFrameLevel((UIParent:GetFrameLevel() or 0) + 1000)
+    end
+    importConfirmFrame:SetAllPoints(UIParent)
+    importConfirmFrame:Hide()
+
+    if UISpecialFrames then
+      table.insert(UISpecialFrames, "DoiteExport_ImportConfirmFrame")
+    end
+
+    local bg = importConfirmFrame:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints(importConfirmFrame)
+    bg:SetTexture(0, 0, 0, 0.75)
+
+    local box = CreateFrame("Frame", nil, importConfirmFrame)
+    box:SetWidth(420)
+    box:SetHeight(140)
+    box:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    if importConfirmFrame.GetFrameLevel and box.SetFrameLevel then
+      box:SetFrameLevel(importConfirmFrame:GetFrameLevel() + 1)
+    end
+
+    local boxBG = box:CreateTexture(nil, "BACKGROUND")
+    boxBG:SetAllPoints(box)
+    boxBG:SetTexture(0, 0, 0, 0.9)
+
+    local title = box:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+    title:SetPoint("TOP", box, "TOP", 0, -16)
+    title:SetText("|cffff4040Warning|r")
+
+    local desc = box:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    desc:SetPoint("TOP", title, "BOTTOM", 0, -10)
+    desc:SetWidth(380)
+    desc:SetJustifyH("CENTER")
+    desc:SetText("This import contains custom Lua code that will run on your client.\nOnly import from sources you trust.\n\nProceed with import?")
+
+    local yesBtn = CreateFrame("Button", nil, box, "UIPanelButtonTemplate")
+    yesBtn:SetWidth(80)
+    yesBtn:SetHeight(22)
+    yesBtn:SetText("Yes")
+    yesBtn:SetPoint("BOTTOMRIGHT", box, "BOTTOM", -10, 15)
+
+    local noBtn = CreateFrame("Button", nil, box, "UIPanelButtonTemplate")
+    noBtn:SetWidth(80)
+    noBtn:SetHeight(22)
+    noBtn:SetText("No")
+    noBtn:SetPoint("BOTTOMLEFT", box, "BOTTOM", 10, 15)
+
+    noBtn:SetScript("OnClick", function()
+      importConfirmPkg = nil
+      importConfirmFrame:Hide()
+    end)
+
+    yesBtn:SetScript("OnClick", function()
+      local pkg = importConfirmPkg
+      importConfirmPkg = nil
+      importConfirmFrame:Hide()
+      if pkg then
+        DE_DoImport(pkg)
+      end
+    end)
+  end
+
+  importBtn:SetScript("OnClick", function()
+    local text = importEditBox:GetText() or ""
+    local chat = DEFAULT_CHAT_FRAME or ChatFrame1
+
+    if text == "" then
+      if chat then
+        chat:AddMessage("|cffff0000DoiteAuras:|r Nothing to import. Paste export text first.")
+      end
+      return
+    end
+
+    local pkg, err = DE_ParseExportString(text)
+    if not pkg then
+      if chat then
+        chat:AddMessage("|cffff0000DoiteAuras:|r Import failed: " .. tostring(err or "unknown error"))
+      end
+      return
+    end
+
+    if DE_PackageHasCustomCode(pkg) then
+      DE_EnsureImportConfirmFrame()
+      importConfirmPkg = pkg
+      importConfirmFrame:Show()
+    else
+      DE_DoImport(pkg)
     end
   end)
 

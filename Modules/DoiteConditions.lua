@@ -6245,6 +6245,17 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
           frame._daSortRem = remAura
         end
       end
+
+      ----------------------------------------------------------------
+      -- Custom remaining-time text
+      ----------------------------------------------------------------
+    elseif dataTbl.type == "Custom" then
+      local remCustom = tonumber(dataTbl._daCustomRemaining)
+      if remCustom and remCustom > 0 then
+        remText = _FmtRem(remCustom)
+        wantRem = (remText ~= nil)
+        frame._daSortRem = remCustom
+      end
     end
   end
 
@@ -6315,6 +6326,26 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
       end
     end
   end
+  -- ========== Stack Counter (custom) ==========
+  if dataTbl and dataTbl.type == "Custom" then
+    local cnt = tonumber(dataTbl._daCustomStacks)
+    if cnt then
+      local rounded = math.floor(cnt + 0.5)
+      local s = _DA_NumToStr(rounded)
+      if s ~= frame._daLastStacksText then
+        frame._daLastStacksText = s
+        frame._daTextStacks:SetText(s)
+        frame._daTextStacks:SetTextColor(1, 1, 1, 1)
+      end
+      local sizeToUse = (not wantRem and frame._daRemSize) or frame._daStackSize
+      if sizeToUse and sizeToUse ~= frame._daCurrentStackFontSize then
+        frame._daCurrentStackFontSize = sizeToUse
+        frame._daTextStacks:SetFont(GameFontNormalSmall:GetFont(), sizeToUse, "OUTLINE")
+      end
+      frame._daTextStacks:Show()
+    end
+  end
+
   -- ========== Stack Counter (items: total amount) ==========
   if dataTbl
       and dataTbl.type == "Item"
@@ -6551,6 +6582,25 @@ function DoiteConditions:ApplyVisuals(key, show, glow, grey)
         _EnsureAuraTexture(frame, dataTbl)
       elseif dataTbl.type == "Item" then
         _EnsureItemTexture(frame, dataTbl)
+      elseif dataTbl.type == "Custom" then
+        local tex = dataTbl._daCustomTexture or dataTbl.iconTexture or "Interface\\Icons\\INV_Misc_QuestionMark"
+        if frame.icon then
+          frame.icon:SetTexture(tex)
+        end
+        -- Hide or restore the backdrop (pfUI border / background)
+        local wantHideBG = (dataTbl._daCustomHideBG == true)
+        if wantHideBG then
+          if frame.backdrop and frame.backdrop.Hide then
+            frame.backdrop:Hide()
+          end
+          if frame.icon and frame.icon.SetTexCoord then
+            frame.icon:SetTexCoord(0, 1, 0, 1)
+          end
+        else
+          if frame.backdrop and frame.backdrop.Show then
+            frame.backdrop:Show()
+          end
+        end
       end
     end
   end
@@ -6942,6 +6992,146 @@ function DoiteConditions:EvaluateAbilities(doLogic, doTime)
   end
 end
 
+local function _DoiteCustomCompileForData(key, data)
+  if type(data) ~= "table" then
+    return nil, "Invalid custom data entry."
+  end
+
+  local src = data.customFunctionSource
+  if type(src) ~= "string" or src == "" then
+    src = _G["DOITE_DEFAULT_CUSTOM_FUNCTION_SOURCE"]
+    data.customFunctionSource = src
+  end
+
+  if data._daCustomCompiled and data._daCustomCompiledSrc == src then
+    return data._daCustomCompiled, nil
+  end
+
+  local wrapped = "return function(data)\n" .. src .. "\nend"
+  local chunk, err = loadstring(wrapped)
+  if not chunk then
+    return nil, err
+  end
+
+  local ok, fn = pcall(chunk)
+  if not ok then
+    return nil, fn
+  end
+  if type(fn) ~= "function" then
+    return nil, "Compiled custom source is not callable."
+  end
+
+  data._daCustomCompiled = fn
+  data._daCustomCompiledSrc = src
+  data._daCustomCompileError = nil
+  return fn, nil
+end
+
+local function _DoiteCustomPrintOnce(data, key, prefix, msg)
+  if type(data) ~= "table" then
+    return
+  end
+  local sig = tostring(prefix or "Custom") .. ": " .. tostring(msg or "?")
+  if data._daCustomLastError == sig then
+    return
+  end
+  data._daCustomLastError = sig
+
+  local cf = DEFAULT_CHAT_FRAME or ChatFrame1
+  if cf and cf.AddMessage then
+    cf:AddMessage("|cffff4040DoiteAuras custom [" .. tostring(key or "?") .. "] " .. tostring(prefix or "error") .. ":|r " .. tostring(msg))
+  end
+end
+
+local function _DoiteCustomClearError(data)
+  if type(data) == "table" then
+    data._daCustomLastError = nil
+  end
+end
+
+local function _DoiteCustomEvaluateOne(key, data)
+  if type(data) ~= "table" then
+    return false
+  end
+
+  local fn, compileErr = _DoiteCustomCompileForData(key, data)
+  if not fn then
+    _DoiteCustomPrintOnce(data, key, "compile error", compileErr)
+    data._daCustomShow = false
+    data._daCustomTexture = nil
+    data._daCustomHideBG = false
+    data._daCustomRemaining = nil
+    data._daCustomStacks = nil
+    DoiteConditions:ApplyVisuals(key, false, false, false)
+    return true
+  end
+
+  local state = data._daCustomRuntime
+  if type(state) ~= "table" then
+    state = {}
+    data._daCustomRuntime = state
+  end
+
+  local ok, show, texture, hideBackground, remaining, stacks = pcall(fn, state)
+  if not ok then
+    _DoiteCustomPrintOnce(data, key, "runtime error", show)
+    data._daCustomShow = false
+    data._daCustomTexture = nil
+    data._daCustomHideBG = false
+    data._daCustomRemaining = nil
+    data._daCustomStacks = nil
+    DoiteConditions:ApplyVisuals(key, false, false, false)
+    return true
+  end
+
+  _DoiteCustomClearError(data)
+  data._daCustomShow = (show == true or show == 1)
+  data._daCustomTexture = (type(texture) == "string" and texture ~= "") and texture or nil
+  data._daCustomHideBG = (hideBackground == true)
+  data._daCustomRemaining = (type(remaining) == "number") and remaining or nil
+  data._daCustomStacks = (type(stacks) == "number") and stacks or nil
+
+  DoiteConditions:ApplyVisuals(key, data._daCustomShow, false, false)
+  return true
+end
+
+function DoiteConditions:EvaluateCustom()
+  local editingAny = _IsAnyKeyUnderEdit()
+  local live = DoiteAurasDB and DoiteAurasDB.spells
+  local edit = DoiteDB and DoiteDB.icons
+  local touched = false
+
+  if live then
+    for key, data in pairs(live) do
+      if type(data) ~= "table" then
+        live[key] = nil
+      elseif data.type == "Custom" then
+        data.key = key
+        if _DoiteCustomEvaluateOne(key, data) then
+          touched = true
+        end
+      end
+    end
+  end
+
+  if edit and editingAny then
+    for key, data in pairs(edit) do
+      if (not live) or (not live[key]) then
+        if type(data) ~= "table" then
+          edit[key] = nil
+        elseif data.type == "Custom" then
+          data.key = key
+          if _DoiteCustomEvaluateOne(key, data) then
+            touched = true
+          end
+        end
+      end
+    end
+  end
+
+  return touched
+end
+
 function DoiteConditions:EvaluateAuras()
   local editingAny = _IsAnyKeyUnderEdit()
   local live = DoiteAurasDB and DoiteAurasDB.spells
@@ -7228,6 +7418,7 @@ function DoiteConditions_OnUpdate(dt)
   local needAbilityLogic = dirty_ability or dirty_power
   local needAbilityTime = dirty_ability_time
   local needAura = dirty_aura or dirty_target or dirty_power
+  local didCustom = false
 
   if needAbilityLogic or needAbilityTime then
     _G.DoiteConditions:EvaluateAbilities(needAbilityLogic, needAbilityTime)
@@ -7236,7 +7427,10 @@ function DoiteConditions_OnUpdate(dt)
     _G.DoiteConditions:EvaluateAuras()
   end
 
-  if needAbilityLogic or needAbilityTime or needAura then
+  -- Custom functions run here near the end of OnUpdate.
+  didCustom = _G.DoiteConditions:EvaluateCustom() and true or false
+
+  if needAbilityLogic or needAbilityTime or needAura or didCustom then
     dirty_aura, dirty_target, dirty_power = false, false, false
     dirty_ability_time = false
     -- While sliding, ability icons updating each frame

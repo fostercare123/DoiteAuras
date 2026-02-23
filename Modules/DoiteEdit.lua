@@ -17,6 +17,8 @@ local SafeEvaluate
 local srows
 local ShowSeparatorsForType
 local SetSeparator
+local DEFAULT_CUSTOM_FUNCTION_SOURCE
+local _ReflowCondAreaHeight
 
 -- Icon-level category UI helpers (assigned later from CreateConditionsUI)
 local Category_RefreshDropdown = nil
@@ -414,6 +416,16 @@ local function EnsureDBEntry(key)
       ic.weaponFilter = nil
     end
 
+  elseif d.type == "Custom" then
+    -- custom code drives visibility/texture/overlay; no stock condition subtree
+    d.conditions.ability = nil
+    d.conditions.aura = nil
+    d.conditions.item = nil
+
+    if type(d.customFunctionSource) ~= "string" or d.customFunctionSource == "" then
+      d.customFunctionSource = DEFAULT_CUSTOM_FUNCTION_SOURCE
+    end
+
   else
     -- Buff / Debuff (treat anything not "Ability"/"Item" as an aura carrier)
     -- keep aura; remove ability/item
@@ -646,6 +658,14 @@ local function InitGroupDropdown(dd, data)
             if leaders[picked] ~= currentKey then
               d.isLeader = false
             end
+          end
+        end
+
+        -- Custom auras: clear stale runtime data and auto-save when group changes
+        if d.type == "Custom" then
+          d._daCustomRuntime = {}
+          if condFrame and condFrame.cond_custom_function_save then
+            condFrame.cond_custom_function_save:Click()
           end
         end
 
@@ -1233,6 +1253,47 @@ local function DoiteEdit_AnnounceEditingIcon(displayName)
   DEFAULT_CHAT_FRAME:AddMessage(msg)
 end
 
+DEFAULT_CUSTOM_FUNCTION_SOURCE = [[-- Define custom logic for this aura
+-- a table named 'data' will be passed in, you can store data between frames inside this
+
+-- your code block must return the following:
+local show = true -- [boolean] true to show the icon, false to hide
+local texture = "Interface\\Icons\\Temp" -- [string] MPOWA icons available in "Interface\\Addons\\DoiteAuras\\Textures\\MPOWA\\AuraXX"
+
+local hideBackground = false -- [boolean] if true will hide the default background behind the icon texture
+
+local remaining = nil -- [number] if present will display in the center of the icon
+local stacks = nil -- [number] if present will display in the bottom right of the icon
+
+return show, texture, hideBackground, remaining, stacks]]
+
+-- Share with other modules (e.g. DoiteConditions)
+_G["DOITE_DEFAULT_CUSTOM_FUNCTION_SOURCE"] = DEFAULT_CUSTOM_FUNCTION_SOURCE
+
+local function CompileCustomFunctionSource(source)
+  if type(source) ~= "string" then
+    return nil, "Custom function source must be a string."
+  end
+  if source == "" then
+    return nil, "Custom function source cannot be empty."
+  end
+
+  local wrapped = "return function(data)\n" .. source .. "\nend"
+  local chunk, err = loadstring(wrapped)
+  if not chunk then
+    return nil, err
+  end
+
+  local ok, fn = pcall(chunk)
+  if not ok then
+    return nil, fn
+  end
+  if type(fn) ~= "function" then
+    return nil, "Compiled custom function is not callable."
+  end
+  return fn, nil
+end
+
 
 -- Local copy of the TitleCase helper used by DoiteAuras (for pretty printing aura names)
 -- Special-cases Roman numerals (II, IV, VI, VIII, X, etc.) so they stay fully uppercase.
@@ -1455,8 +1516,8 @@ local function CreateConditionsUI()
     srow16_y, srow17_y, srow18_y, srow19_y, srow20_y
   }
 
-  -- === Per-type separator caches (ability/aura/item are independent)
-  condFrame._seps = condFrame._seps or { ability = {}, aura = {}, item = {} }
+  -- === Per-type separator caches (ability/aura/item/custom are independent)
+  condFrame._seps = condFrame._seps or { ability = {}, aura = {}, item = {}, custom = {} }
 
   local function _EnsureSep(typeKey, slot)
     local list = condFrame._seps[typeKey]
@@ -1474,7 +1535,7 @@ local function CreateConditionsUI()
     if not typeKey then
       return nil
     end
-    if typeKey == "ability" or typeKey == "aura" or typeKey == "item" then
+    if typeKey == "ability" or typeKey == "aura" or typeKey == "item" or typeKey == "custom" then
       return typeKey
     end
 
@@ -1488,6 +1549,8 @@ local function CreateConditionsUI()
       return "aura"
     elseif string.find(lower, "item", 1, true) then
       return "item"
+    elseif string.find(lower, "custom", 1, true) then
+      return "custom"
     end
 
     return nil
@@ -1728,6 +1791,64 @@ local function CreateConditionsUI()
   condFrame.cond_aura_tip:SetWidth(120)
   condFrame.cond_aura_tip:Hide()
   SetSeparator("aura", 1, "AURA PRESENCE", true, true)
+
+  -- Custom function editor (Custom type)
+  -- The edit box lives directly in _condArea; the outer conditions scrollbar drives it.
+  -- No nested scroll frame – the EditBox just grows tall and the parent scrolls.
+  SetSeparator("custom", 1, "CUSTOM FUNCTION", true, true)
+
+  condFrame.cond_custom_function_edit = CreateFrame("EditBox", nil, _Parent())
+  condFrame.cond_custom_function_edit:SetMultiLine(true)
+  condFrame.cond_custom_function_edit:SetAutoFocus(false)
+  condFrame.cond_custom_function_edit:SetFontObject("GameFontHighlightSmall")
+  condFrame.cond_custom_function_edit:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 2, -5)
+  condFrame.cond_custom_function_edit:SetPoint("TOPRIGHT", _Parent(), "TOPRIGHT", -2, -5)
+  condFrame.cond_custom_function_edit:SetWidth((_Parent():GetWidth() or 260) - 4)
+  condFrame.cond_custom_function_edit:SetHeight(500)
+  condFrame.cond_custom_function_edit:EnableMouse(true)
+  if condFrame.cond_custom_function_edit.SetTextInsets then
+    condFrame.cond_custom_function_edit:SetTextInsets(4, 4, 4, 4)
+  end
+  -- Auto-grow height to fit content so the outer scroll area sizes correctly.
+  condFrame.cond_custom_function_edit:SetScript("OnTextChanged", function()
+    local eb = condFrame.cond_custom_function_edit
+    if not eb then return end
+    -- Count lines via newlines in the text
+    local txt = eb:GetText() or ""
+    local lines = 1
+    for _ in string.gfind(txt, "\n") do
+      lines = lines + 1
+    end
+    local lineH = 15  -- approximate line height for GameFontHighlightSmall
+    local newH = math.max((lines + 3) * lineH, 180)
+    eb:SetHeight(newH)
+    if _ReflowCondAreaHeight then
+      _ReflowCondAreaHeight()
+    end
+  end)
+  -- Forward mouse wheel from the edit box to the outer conditions scroll frame.
+  condFrame.cond_custom_function_edit:EnableMouseWheel(true)
+  condFrame.cond_custom_function_edit:SetScript("OnMouseWheel", function()
+    local sf = condFrame and condFrame._scrollFrame
+    if not sf then return end
+    local cur = sf:GetVerticalScroll() or 0
+    local step = 40
+    if arg1 and arg1 > 0 then
+      sf:SetVerticalScroll(math.max(cur - step, 0))
+    elseif arg1 and arg1 < 0 then
+      local sbName = sf:GetName() and (sf:GetName() .. "ScrollBar")
+      local sb = sbName and getglobal(sbName)
+      local maxScroll = 0
+      if sb and sb.GetMinMaxValues then
+        local _, hi = sb:GetMinMaxValues()
+        maxScroll = hi or 0
+      end
+      sf:SetVerticalScroll(math.min(cur + step, maxScroll))
+    end
+  end)
+  condFrame.cond_custom_function_edit:Hide()
+
+  -- Save button + status are created after gridBtn exists (see below gridBtn creation).
 
   condFrame.cond_aura_incombat = MakeCheck("DoiteCond_Aura_InCombat", "In combat", 0, row2_y)
   condFrame.cond_aura_outcombat = MakeCheck("DoiteCond_Aura_OutCombat", "Out of combat", 80, row2_y)
@@ -5247,7 +5368,7 @@ function UpdateItemStacksForMissing()
 end
 
 -- Dynamically resize the scroll/content area to fit the last visible row (+20px buffer) + Dynamically resize the scroll/content area AND reposition VFX sections
-local function _ReflowCondAreaHeight()
+_ReflowCondAreaHeight = function()
   if not condFrame then
     return
   end
@@ -7763,6 +7884,18 @@ local function UpdateConditionsUI(data)
 
   local c = data.conditions
 
+  -- Custom controls are hidden by default; shown only for Custom type.
+  if condFrame.cond_custom_function_edit then
+    condFrame.cond_custom_function_edit:Hide()
+  end
+  if condFrame.cond_custom_function_save then
+    condFrame.cond_custom_function_save:Hide()
+  end
+  if condFrame.cond_custom_function_status then
+    condFrame.cond_custom_function_status:Hide()
+    condFrame.cond_custom_function_status:SetText("")
+  end
+
   local function _IsWarriorPaladinShaman()
     local _, cls = UnitClass("player")
     cls = cls and string.upper(cls) or ""
@@ -9318,6 +9451,188 @@ local ic = c.item or {}
       condFrame.cond_aura_class_note:Hide()
     end
 
+  elseif data.type == "Custom" then
+    -- Hide all separators – the edit box fills the entire conditions area.
+    for _, list in pairs(condFrame._seps or {}) do
+      for _, sep in pairs(list) do
+        sep:Hide()
+      end
+    end
+
+    if AuraCond_RefreshFromDB then
+      AuraCond_RefreshFromDB(nil)
+    end
+    if VfxCond_RefreshFromDB then
+      VfxCond_RefreshFromDB(nil)
+    end
+
+    -- Show custom function edit box (fills the outer scroll area)
+    if condFrame.cond_custom_function_edit then
+      condFrame.cond_custom_function_edit:Show()
+      if condFrame._customFunctionLoadedKey ~= currentKey then
+        local src = data.customFunctionSource
+        if type(src) ~= "string" or src == "" then
+          src = DEFAULT_CUSTOM_FUNCTION_SOURCE
+        end
+        condFrame.cond_custom_function_edit:SetText(src)
+        condFrame._customFunctionLoadedKey = currentKey
+      end
+    end
+    -- Save button + status (outside the scroll area, next to Grid button)
+    if condFrame.cond_custom_function_save then
+      condFrame.cond_custom_function_save:Show()
+    end
+    if condFrame.cond_custom_function_status then
+      condFrame.cond_custom_function_status:Show()
+    end
+
+    -- Hide all stock ability/aura/item controls while editing custom code
+    local function _Hide(v)
+      if v and v.Hide then
+        v:Hide()
+      end
+    end
+
+    _Hide(condFrame.cond_ability_usable)
+    _Hide(condFrame.cond_ability_notcd)
+    _Hide(condFrame.cond_ability_oncd)
+    _Hide(condFrame.cond_ability_incombat)
+    _Hide(condFrame.cond_ability_outcombat)
+    _Hide(condFrame.cond_ability_groupingDD)
+    _Hide(condFrame.cond_ability_target_help)
+    _Hide(condFrame.cond_ability_target_harm)
+    _Hide(condFrame.cond_ability_target_self)
+    _Hide(condFrame.cond_ability_target_alive)
+    _Hide(condFrame.cond_ability_target_dead)
+    _Hide(condFrame.cond_ability_glow)
+    _Hide(condFrame.cond_ability_greyscale)
+    _Hide(condFrame.cond_ability_slider)
+    _Hide(condFrame.cond_ability_slider_dir)
+    _Hide(condFrame.cond_ability_slider_glow)
+    _Hide(condFrame.cond_ability_slider_grey)
+    _Hide(condFrame.cond_ability_remaining_cb)
+    _Hide(condFrame.cond_ability_remaining_comp)
+    _Hide(condFrame.cond_ability_remaining_val)
+    _Hide(condFrame.cond_ability_remaining_val_enter)
+    _Hide(condFrame.cond_ability_text_time)
+    _Hide(condFrame.cond_ability_power)
+    _Hide(condFrame.cond_ability_power_comp)
+    _Hide(condFrame.cond_ability_power_val)
+    _Hide(condFrame.cond_ability_power_val_enter)
+    _Hide(condFrame.cond_ability_hp_my)
+    _Hide(condFrame.cond_ability_hp_tgt)
+    _Hide(condFrame.cond_ability_hp_comp)
+    _Hide(condFrame.cond_ability_hp_val)
+    _Hide(condFrame.cond_ability_hp_val_enter)
+    _Hide(condFrame.cond_ability_cp_cb)
+    _Hide(condFrame.cond_ability_cp_comp)
+    _Hide(condFrame.cond_ability_cp_val)
+    _Hide(condFrame.cond_ability_cp_val_enter)
+    _Hide(condFrame.cond_ability_class_note)
+    _Hide(condFrame.cond_ability_formDD)
+    _Hide(condFrame.cond_ability_weaponDD)
+    _Hide(condFrame.cond_ability_distanceDD)
+    _Hide(condFrame.cond_ability_unitTypeDD)
+
+    _Hide(condFrame.cond_aura_found)
+    _Hide(condFrame.cond_aura_missing)
+    _Hide(condFrame.cond_aura_tip)
+    _Hide(condFrame.cond_aura_incombat)
+    _Hide(condFrame.cond_aura_outcombat)
+    _Hide(condFrame.cond_aura_groupingDD)
+    _Hide(condFrame.cond_aura_target_help)
+    _Hide(condFrame.cond_aura_target_harm)
+    _Hide(condFrame.cond_aura_onself)
+    _Hide(condFrame.cond_aura_target_alive)
+    _Hide(condFrame.cond_aura_target_dead)
+    _Hide(condFrame.cond_aura_glow)
+    _Hide(condFrame.cond_aura_greyscale)
+    _Hide(condFrame.cond_aura_distanceDD)
+    _Hide(condFrame.cond_aura_unitTypeDD)
+    _Hide(condFrame.cond_aura_power)
+    _Hide(condFrame.cond_aura_power_comp)
+    _Hide(condFrame.cond_aura_power_val)
+    _Hide(condFrame.cond_aura_power_val_enter)
+    _Hide(condFrame.cond_aura_hp_my)
+    _Hide(condFrame.cond_aura_hp_tgt)
+    _Hide(condFrame.cond_aura_hp_comp)
+    _Hide(condFrame.cond_aura_hp_val)
+    _Hide(condFrame.cond_aura_hp_val_enter)
+    _Hide(condFrame.cond_aura_mine)
+    _Hide(condFrame.cond_aura_others)
+    _Hide(condFrame.cond_aura_owner_tip)
+    _Hide(condFrame.cond_aura_remaining_cb)
+    _Hide(condFrame.cond_aura_remaining_comp)
+    _Hide(condFrame.cond_aura_remaining_val)
+    _Hide(condFrame.cond_aura_remaining_val_enter)
+    _Hide(condFrame.cond_aura_stacks_cb)
+    _Hide(condFrame.cond_aura_stacks_comp)
+    _Hide(condFrame.cond_aura_stacks_val)
+    _Hide(condFrame.cond_aura_stacks_val_enter)
+    _Hide(condFrame.cond_aura_text_time)
+    _Hide(condFrame.cond_aura_text_stack)
+    _Hide(condFrame.cond_aura_cp_cb)
+    _Hide(condFrame.cond_aura_cp_comp)
+    _Hide(condFrame.cond_aura_cp_val)
+    _Hide(condFrame.cond_aura_cp_val_enter)
+    _Hide(condFrame.cond_aura_weaponDD)
+    _Hide(condFrame.cond_aura_formDD)
+    _Hide(condFrame.cond_aura_class_note)
+
+    _Hide(condFrame.cond_item_where_equipped)
+    _Hide(condFrame.cond_item_where_bag)
+    _Hide(condFrame.cond_item_where_missing)
+    _Hide(condFrame.cond_item_inv_trinket1)
+    _Hide(condFrame.cond_item_inv_trinket2)
+    _Hide(condFrame.cond_item_inv_trinket_first)
+    _Hide(condFrame.cond_item_inv_trinket_both)
+    _Hide(condFrame.cond_item_inv_wep_mainhand)
+    _Hide(condFrame.cond_item_inv_wep_offhand)
+    _Hide(condFrame.cond_item_inv_wep_ranged)
+    _Hide(condFrame.cond_item_incombat)
+    _Hide(condFrame.cond_item_outcombat)
+    _Hide(condFrame.cond_item_groupingDD)
+    _Hide(condFrame.cond_item_notcd)
+    _Hide(condFrame.cond_item_oncd)
+    _Hide(condFrame.cond_item_target_help)
+    _Hide(condFrame.cond_item_target_harm)
+    _Hide(condFrame.cond_item_target_self)
+    _Hide(condFrame.cond_item_target_alive)
+    _Hide(condFrame.cond_item_target_dead)
+    _Hide(condFrame.cond_item_glow)
+    _Hide(condFrame.cond_item_greyscale)
+    _Hide(condFrame.cond_item_text_time)
+    _Hide(condFrame.cond_item_enchant)
+    _Hide(condFrame.cond_item_text_enchant)
+    _Hide(condFrame.cond_item_stacks_cb)
+    _Hide(condFrame.cond_item_stacks_comp)
+    _Hide(condFrame.cond_item_stacks_val)
+    _Hide(condFrame.cond_item_stacks_val_enter)
+    _Hide(condFrame.cond_item_text_stack)
+    _Hide(condFrame.cond_item_power)
+    _Hide(condFrame.cond_item_power_comp)
+    _Hide(condFrame.cond_item_power_val)
+    _Hide(condFrame.cond_item_power_val_enter)
+    _Hide(condFrame.cond_item_hp_my)
+    _Hide(condFrame.cond_item_hp_tgt)
+    _Hide(condFrame.cond_item_hp_comp)
+    _Hide(condFrame.cond_item_hp_val)
+    _Hide(condFrame.cond_item_hp_val_enter)
+    _Hide(condFrame.cond_item_remaining_cb)
+    _Hide(condFrame.cond_item_remaining_comp)
+    _Hide(condFrame.cond_item_remaining_val)
+    _Hide(condFrame.cond_item_remaining_val_enter)
+    _Hide(condFrame.cond_item_cp_cb)
+    _Hide(condFrame.cond_item_cp_comp)
+    _Hide(condFrame.cond_item_cp_val)
+    _Hide(condFrame.cond_item_cp_val_enter)
+    _Hide(condFrame.cond_item_weaponDD)
+    _Hide(condFrame.cond_item_class_note)
+    _Hide(condFrame.cond_item_formDD)
+    _Hide(condFrame.cond_item_distanceDD)
+    _Hide(condFrame.cond_item_unitTypeDD)
+    _Hide(condFrame.cond_item_clickable)
+
     -- AURA (Buff/Debuff)
   else
     ShowSeparatorsForType("aura")
@@ -10200,6 +10515,10 @@ function UpdateCondFrameForKey(key)
       data.conditions.item = data.conditions.item or {}
       data.conditions.ability = nil
       data.conditions.aura = nil
+    elseif data.type == "Custom" then
+      data.conditions.ability = nil
+      data.conditions.aura = nil
+      data.conditions.item = nil
     else
       data.conditions.aura = data.conditions.aura or {}
       data.conditions.ability = nil
@@ -10217,6 +10536,8 @@ function UpdateCondFrameForKey(key)
     typeColor = "|cffff4d4d"
   elseif data.type == "Item" then
     typeColor = "|cffffd000"
+  elseif data.type == "Custom" then
+    typeColor = "|cff7dd2ff"
   end
   condFrame.header:SetText("Edit: " .. (data.displayName or key) .. " " .. typeColor .. "(" .. (data.type or "") .. ")|r")
 
@@ -10782,6 +11103,74 @@ function DoiteConditions_Show(key)
     -- Ensure distinct Draw Layer to not hide under standard dialog art
     gridBtn:SetFrameLevel(condFrame:GetFrameLevel() + 5)
     condFrame.gridBtn = gridBtn
+
+    -- Custom-function Save button (to the left of Grid button, same row)
+    local customSaveBtn = CreateFrame("Button", "DoiteConditions_CustomSaveBtn", condFrame, "UIPanelButtonTemplate")
+    customSaveBtn:SetWidth(70)
+    customSaveBtn:SetHeight(20)
+    customSaveBtn:SetPoint("RIGHT", gridBtn, "LEFT", -8, 0)
+    customSaveBtn:SetText("Save")
+    customSaveBtn:SetFrameLevel(condFrame:GetFrameLevel() + 5)
+    customSaveBtn:Hide()
+    condFrame.cond_custom_function_save = customSaveBtn
+
+    local customStatusText = condFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    customStatusText:SetPoint("RIGHT", customSaveBtn, "LEFT", -8, 0)
+    customStatusText:SetTextColor(0.7, 0.7, 0.7)
+    customStatusText:SetText("")
+    condFrame.cond_custom_function_status = customStatusText
+
+    customSaveBtn:SetScript("OnClick", function()
+      if not currentKey then
+        return
+      end
+
+      local edit = condFrame and condFrame.cond_custom_function_edit
+      local source = (edit and edit.GetText and edit:GetText()) or ""
+      local fn, err = CompileCustomFunctionSource(source)
+      if not fn then
+        if condFrame and condFrame.cond_custom_function_status then
+          condFrame.cond_custom_function_status:SetText("|cffff4040Error|r")
+        end
+        if DEFAULT_CHAT_FRAME then
+          DEFAULT_CHAT_FRAME:AddMessage("|cffff4040DoiteAuras: Custom function compile error:|r " .. tostring(err))
+        end
+        return
+      end
+
+      local d = EnsureDBEntry(currentKey)
+      local okRun, show, texture, hideBackground, remaining, stacks = pcall(fn, {})
+      if not okRun then
+        if condFrame and condFrame.cond_custom_function_status then
+          condFrame.cond_custom_function_status:SetText("|cffff4040Error|r")
+        end
+        if DEFAULT_CHAT_FRAME then
+          DEFAULT_CHAT_FRAME:AddMessage("|cffff4040DoiteAuras: Custom function runtime error:|r " .. tostring(show))
+        end
+        return
+      end
+
+      d.customFunctionSource = source
+      d._daCustomCompiled = fn
+      d._daCustomCompiledSrc = source
+      d._daCustomRuntime = {}
+      d._daCustomShow = (show == true or show == 1)
+      d._daCustomTexture = (type(texture) == "string" and texture ~= "") and texture or nil
+      d._daCustomHideBG = (hideBackground == true)
+      d._daCustomRemaining = (type(remaining) == "number") and remaining or nil
+      d._daCustomStacks = (type(stacks) == "number") and stacks or nil
+
+      if condFrame and condFrame.cond_custom_function_status then
+        condFrame.cond_custom_function_status:SetText("|cff22ff22Saved|r")
+      end
+
+      if DoiteConditions_RequestEvaluate then
+        DoiteConditions_RequestEvaluate()
+      end
+      if DoiteAuras_RefreshIcons then
+        DoiteAuras_RefreshIcons()
+      end
+    end)
 
     -- Sliders helper (makes a slider + small EditBox beneath it)
     local function MakeSlider(name, text, x, y, width, minVal, maxVal, step)

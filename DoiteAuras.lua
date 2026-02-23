@@ -434,7 +434,7 @@ end
 
 -- Main frame (layout & sizes)
 local frame = CreateFrame("Frame", "DoiteAurasFrame", UIParent)
-frame:SetWidth(355)
+frame:SetWidth(385)
 frame:SetHeight(470)
 frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
 frame:EnableMouse(true)
@@ -1097,7 +1097,7 @@ end
 
 -- Type selector checkboxes
 local currentType = "Ability"
-local abilityCB, buffCB, debuffCB, itemsCB, barsCB
+local abilityCB, buffCB, debuffCB, itemsCB, barsCB, customCB
 
 local function DA_UpdateTypeUI()
     if currentType == "Ability" then
@@ -1142,6 +1142,14 @@ local function DA_UpdateTypeUI()
         end
         if itemDropDown then itemDropDown:Hide() end
         if addBtn then addBtn:Disable() end
+
+    elseif currentType == "Custom" then
+        intro:SetText("Enter the custom aura name:")
+        input:Show()
+        if abilityDropDown then abilityDropDown:Hide() end
+        if itemDropDown then itemDropDown:Hide() end
+        if barDropDown  then barDropDown:Hide()  end
+        if addBtn then addBtn:Enable() end
     end
 end
 
@@ -1182,12 +1190,21 @@ barsCB.text = barsCB:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 barsCB.text:SetPoint("LEFT", barsCB, "RIGHT", 2, 0)
 barsCB.text:SetText("Bars")
 
+-- Custom checkbox (to the right of Bars)
+customCB = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
+customCB:SetWidth(20); customCB:SetHeight(20)
+customCB:SetPoint("TOPLEFT", input, "BOTTOMLEFT", 285, -3)
+customCB.text = customCB:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+customCB.text:SetPoint("LEFT", customCB, "RIGHT", 2, 0)
+customCB.text:SetText("Custom")
+
 abilityCB:SetScript("OnClick", function()
     abilityCB:SetChecked(true)
     buffCB:SetChecked(false)
     debuffCB:SetChecked(false)
     if itemsCB then itemsCB:SetChecked(false) end
     if barsCB  then barsCB:SetChecked(false)  end
+    if customCB then customCB:SetChecked(false) end
     currentType = "Ability"
     DA_UpdateTypeUI()
     -- Re-scan spellbook each time Abilities is (re)selected (for quick respecs)
@@ -1202,6 +1219,7 @@ buffCB:SetScript("OnClick", function()
     debuffCB:SetChecked(false)
     if itemsCB then itemsCB:SetChecked(false) end
     if barsCB  then barsCB:SetChecked(false)  end
+    if customCB then customCB:SetChecked(false) end
     currentType = "Buff"
     DA_UpdateTypeUI()
 end)
@@ -1212,6 +1230,7 @@ debuffCB:SetScript("OnClick", function()
     debuffCB:SetChecked(true)
     if itemsCB then itemsCB:SetChecked(false) end
     if barsCB  then barsCB:SetChecked(false)  end
+    if customCB then customCB:SetChecked(false) end
     currentType = "Debuff"
     DA_UpdateTypeUI()
 end)
@@ -1230,6 +1249,7 @@ itemsCB:SetScript("OnClick", function()
     debuffCB:SetChecked(false)
     itemsCB:SetChecked(true)
     if barsCB then barsCB:SetChecked(false) end
+    if customCB then customCB:SetChecked(false) end
 
     currentType = "Item"
     DA_UpdateTypeUI()
@@ -1250,8 +1270,27 @@ barsCB:SetScript("OnClick", function()
     buffCB:SetChecked(false)
     debuffCB:SetChecked(false)
     if itemsCB then itemsCB:SetChecked(false) end
+    if customCB then customCB:SetChecked(false) end
     barsCB:SetChecked(true)
     currentType = "Bar"
+    DA_UpdateTypeUI()
+end)
+
+customCB:SetScript("OnClick", function()
+    if not customCB:GetChecked() then
+        if currentType == "Custom" then
+            customCB:SetChecked(true)
+            return
+        end
+    end
+
+    abilityCB:SetChecked(false)
+    buffCB:SetChecked(false)
+    debuffCB:SetChecked(false)
+    if itemsCB then itemsCB:SetChecked(false) end
+    if barsCB then barsCB:SetChecked(false) end
+    customCB:SetChecked(true)
+    currentType = "Custom"
     DA_UpdateTypeUI()
 end)
 
@@ -1261,6 +1300,7 @@ frame:SetScript("OnShow", function()
     debuffCB:SetChecked(false)
     if itemsCB then itemsCB:SetChecked(false) end
     if barsCB  then barsCB:SetChecked(false)  end
+    if customCB then customCB:SetChecked(false) end
     currentType = "Ability"
     DA_UpdateTypeUI()
     -- On open (/da or minimap), rebuild the ability dropdown from the current spellbook
@@ -1288,7 +1328,7 @@ end)
 
 -- Scrollable container
 local listContainer = CreateFrame("Frame", nil, frame)
-listContainer:SetWidth(300)
+listContainer:SetWidth(330)
 listContainer:SetHeight(260)
 listContainer:SetPoint("TOPLEFT", input, "BOTTOMLEFT", -5, -25)
 listContainer:SetBackdrop({
@@ -1299,12 +1339,12 @@ listContainer:SetBackdropColor(0,0,0,0.7)
 
 local scrollFrame = CreateFrame("ScrollFrame", "DoiteAurasScroll", listContainer, "UIPanelScrollFrameTemplate")
 -- Slightly wider & closer to the border so it feels less "inset"
-scrollFrame:SetWidth(290)
+scrollFrame:SetWidth(320)
 scrollFrame:SetHeight(250)
 scrollFrame:SetPoint("TOPLEFT", listContainer, "TOPLEFT", 5, -5)
 
 local listContent = CreateFrame("Frame", "DoiteAurasListContent", scrollFrame)
-listContent:SetWidth(290)
+listContent:SetWidth(320)
 listContent:SetHeight(252)
 scrollFrame:SetScrollChild(listContent)
 
@@ -1347,7 +1387,7 @@ _DA_UpdateTestAllButton()
 -- Guide text
 local guide = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 guide:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 20, 20)
-guide:SetWidth(315)
+guide:SetWidth(345)
 guide:SetJustifyH("LEFT")
 if guide.SetTextColor then guide:SetTextColor(0.7,0.7,0.7) end
 guide:SetText("Guide: DoiteAuras shows only what matters—abilities, buffs, debuffs, items, or bars—when you actually need them. Add an icon or bar, pick its type, and define when it appears using simple conditions like cooldown, aura state, combat, or target. Everything updates automatically, remembers textures once seen, and keeps your UI clean and reactive.")
@@ -2777,7 +2817,7 @@ local function RefreshList()
             local hdr = groupHeaders[headerIndex]
             if not hdr then
                 hdr = CreateFrame("Frame", nil, listContent)
-                hdr:SetWidth(290); hdr:SetHeight(22)
+                hdr:SetWidth(320); hdr:SetHeight(22)
 
                 hdr.bg = hdr:CreateTexture(nil, "BACKGROUND")
                 hdr.bg:SetAllPoints(hdr)
@@ -3028,7 +3068,7 @@ local function RefreshList()
                 local btn = spellButtons[key]
                 if not btn then
                     btn = CreateFrame("Frame", nil, listContent)
-                    btn:SetWidth(290); btn:SetHeight(50)
+                    btn:SetWidth(320); btn:SetHeight(50)
 
                     btn.fontString = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
                     btn.fontString:SetPoint("TOPLEFT", btn, "TOPLEFT", 15, -2)
@@ -3089,6 +3129,9 @@ local function RefreshList()
                 elseif data.type == "Bar" then
                     baseLabel = "Bar"
                     baseColor = "|cffd27dff"
+                elseif data.type == "Custom" then
+                    baseLabel = "Custom"
+                    baseColor = "|cff7dd2ff"
                 else
                     baseLabel = tostring(data.type or "Unknown")
                     baseColor = "|cffcccccc"
@@ -3120,6 +3163,12 @@ local function RefreshList()
                     -- detect if this was the last icon using them.
                     local groupName    = data and data.group
                     local categoryName = data and data.category
+
+                    -- Close the edit frame if it's open for this aura
+                    local ef = _G["DoiteEdit_Frame"]
+                    if ef and ef:IsShown() and _G["DoiteEdit_CurrentKey"] == key then
+                        ef:Hide()
+                    end
 
                     -- Remove from DoiteAuras DB
                     DoiteAurasDB.spells[key] = nil
@@ -3154,6 +3203,7 @@ local function RefreshList()
                     if debuffCB  then debuffCB:SetChecked(currentType == "Debuff") end
                     if itemsCB   then itemsCB:SetChecked(currentType == "Item")   end
                     if barsCB    then barsCB:SetChecked(currentType == "Bar")     end
+                    if customCB  then customCB:SetChecked(currentType == "Custom") end
 
                     if currentType == "Item" then
                         DA_UpdateTypeUI()
