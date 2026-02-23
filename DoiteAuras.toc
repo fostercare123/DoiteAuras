@@ -1,6 +1,6 @@
 ## Interface: 11200
 ## Title: |cff6FA8DC[DoiteAuras]|r
-## Notes: A WeakAuras light addon for Vanilla by Doite.
+## Notes: WeakAuras-light addon for vanilla by Doite.
 ## Author: Doite
 ## Version: 1.5.3
 ## SavedVariablesPerCharacter: DoiteAurasDB
