@@ -17,6 +17,7 @@ local function CreateGuidCache(guid)
     activeDebuffs = {},
     cappedBuffsExpirationTime = {},
     cappedBuffsStacks = {},
+    overflowDebuffSpellIdByBuffSlot = {}, -- buff-slot index (1-32) -> spellId for overflow debuffs living in auraSlots 0-31
     numActiveBuffs = 0,
     numActiveDebuffs = 0,
     lastSeenTime = GetTime(),
@@ -38,6 +39,7 @@ local DoiteTargetAuras = {
 
   cappedBuffsExpirationTime = {}, -- current target cache: spell name -> expiration time in seconds
   cappedBuffsStacks = {}, -- current target cache: spell name -> stacks
+  overflowDebuffSpellIdByBuffSlot = {}, -- current target cache: buff-slot index (1-32) -> spellId
 
   numActiveBuffs = 0,
   numActiveDebuffs = 0,
@@ -65,6 +67,7 @@ local function SetActiveCache(cache)
   DoiteTargetAuras.activeDebuffs = cache.activeDebuffs
   DoiteTargetAuras.cappedBuffsExpirationTime = cache.cappedBuffsExpirationTime
   DoiteTargetAuras.cappedBuffsStacks = cache.cappedBuffsStacks
+  DoiteTargetAuras.overflowDebuffSpellIdByBuffSlot = cache.overflowDebuffSpellIdByBuffSlot
   DoiteTargetAuras.numActiveBuffs = cache.numActiveBuffs
   DoiteTargetAuras.numActiveDebuffs = cache.numActiveDebuffs
 end
@@ -141,6 +144,14 @@ end
 local function RemoveCappedBuff(spellName)
   DoiteTargetAuras.cappedBuffsExpirationTime[spellName] = 0
   DoiteTargetAuras.cappedBuffsStacks[spellName] = 0
+end
+
+local function IsOverflowDebuffBuffSlot(slot, aura)
+  if not slot or not aura or not aura.spellId then
+    return false
+  end
+
+  return DoiteTargetAuras.overflowDebuffSpellIdByBuffSlot[slot] == aura.spellId
 end
 
 local function HasAnyActiveCappedBuffs()
@@ -228,10 +239,18 @@ local function UpdateAuras()
     local spellId = auraSpellIds[i]
     if spellId and spellId ~= 0 then
       DoiteTargetAuras.buffs[i] = { spellId = spellId, stacks = auraStacks[i] + 1 }
+
+      -- Keep overflow classification stable only while slot+spellId are unchanged.
+      -- If spellId changed in this buff slot, clear stale "overflow debuff" marker.
+      if DoiteTargetAuras.overflowDebuffSpellIdByBuffSlot[i] and DoiteTargetAuras.overflowDebuffSpellIdByBuffSlot[i] ~= spellId then
+        DoiteTargetAuras.overflowDebuffSpellIdByBuffSlot[i] = nil
+      end
+
       MarkActive(spellId, DoiteTargetAuras.activeBuffs, i)
       DoiteTargetAuras.numActiveBuffs = DoiteTargetAuras.numActiveBuffs + 1
     else
       DoiteTargetAuras.buffs[i] = nil
+      DoiteTargetAuras.overflowDebuffSpellIdByBuffSlot[i] = nil
     end
   end
 
@@ -291,7 +310,7 @@ function DoiteTargetAuras.HasBuff(spellName)
   local i, aura
   for i = 1, MAX_BUFF_SLOTS do
     aura = DoiteTargetAuras.buffs[i]
-    if aura and aura.spellId == spellId then
+    if aura and aura.spellId == spellId and not IsOverflowDebuffBuffSlot(i, aura) then
       return true
     end
   end
@@ -318,7 +337,7 @@ function DoiteTargetAuras.HasDebuff(spellName)
   -- Overflow debuffs may live in buff auraSlots 0-31
   for i = 1, MAX_BUFF_SLOTS do
     aura = DoiteTargetAuras.buffs[i]
-    if aura and aura.spellId == spellId then
+    if aura and aura.spellId == spellId and IsOverflowDebuffBuffSlot(i, aura) then
       return true
     end
   end
@@ -341,13 +360,15 @@ function DoiteTargetAuras.GetBuffStacks(spellName)
   end
 
   if DoiteTargetAuras.buffs[cachedSlot] and DoiteTargetAuras.buffs[cachedSlot].spellId == spellId then
-    return DoiteTargetAuras.buffs[cachedSlot].stacks
+    if not IsOverflowDebuffBuffSlot(cachedSlot, DoiteTargetAuras.buffs[cachedSlot]) then
+      return DoiteTargetAuras.buffs[cachedSlot].stacks
+    end
   end
 
   local i
   for i = 1, MAX_BUFF_SLOTS do
     local aura = DoiteTargetAuras.buffs[i]
-    if aura and aura.spellId == spellId then
+    if aura and aura.spellId == spellId and not IsOverflowDebuffBuffSlot(i, aura) then
       return aura.stacks
     end
   end
@@ -395,13 +416,15 @@ function DoiteTargetAuras.GetDebuffStacks(spellName)
   local cachedBuffSlot = DoiteTargetAuras.activeBuffs[spellName]
   if cachedBuffSlot then
     if DoiteTargetAuras.buffs[cachedBuffSlot] and DoiteTargetAuras.buffs[cachedBuffSlot].spellId == spellId then
-      return DoiteTargetAuras.buffs[cachedBuffSlot].stacks
+      if IsOverflowDebuffBuffSlot(cachedBuffSlot, DoiteTargetAuras.buffs[cachedBuffSlot]) then
+        return DoiteTargetAuras.buffs[cachedBuffSlot].stacks
+      end
     end
 
     local i
     for i = 1, MAX_BUFF_SLOTS do
       local aura = DoiteTargetAuras.buffs[i]
-      if aura and aura.spellId == spellId then
+      if aura and aura.spellId == spellId and IsOverflowDebuffBuffSlot(i, aura) then
         return aura.stacks
       end
     end
@@ -414,7 +437,7 @@ function DoiteTargetAuras.HasBuffSpellId(spellId)
   local i
   for i = 1, MAX_BUFF_SLOTS do
     local aura = DoiteTargetAuras.buffs[i]
-    if aura and aura.spellId == spellId then
+    if aura and aura.spellId == spellId and not IsOverflowDebuffBuffSlot(i, aura) then
       return true
     end
   end
@@ -436,7 +459,7 @@ function DoiteTargetAuras.HasDebuffSpellId(spellId)
   -- Overflow: debuffs can occupy buff auraSlots (0-31), so they may only be present in the buff cache.
   for i = 1, MAX_BUFF_SLOTS do
     local aura = DoiteTargetAuras.buffs[i]
-    if aura and aura.spellId == spellId then
+    if aura and aura.spellId == spellId and IsOverflowDebuffBuffSlot(i, aura) then
       return true
     end
   end
@@ -542,6 +565,7 @@ BuffAddedOtherFrame:SetScript("OnEvent", function()
   cache = cache or GetOrCreateGuidCache(guid)
 
   local slot = auraSlot + 1
+  cache.overflowDebuffSpellIdByBuffSlot[slot] = nil
   cache.buffs[slot] = { spellId = spellId, stacks = stacks }
   MarkActive(spellId, cache.activeBuffs, slot)
 
@@ -588,6 +612,7 @@ BuffRemovedOtherFrame:SetScript("OnEvent", function()
   cache = cache or GetOrCreateGuidCache(guid)
 
   local slot = auraSlot + 1
+  cache.overflowDebuffSpellIdByBuffSlot[slot] = nil
   if state == 1 then
     cache.buffs[slot] = nil
     MarkInactive(spellId, cache.activeBuffs, cache.buffs, MAX_BUFF_SLOTS, slot)
@@ -650,6 +675,7 @@ DebuffAddedOtherFrame:SetScript("OnEvent", function()
   -- Some event paths may still report them via DEBUFF_* events with auraSlot in 0-31. Store them in the buff cache (because that's where the auraSlot actually is).
   elseif auraSlot >= 0 and auraSlot < MAX_BUFF_SLOTS then
     local slot = auraSlot + 1
+    cache.overflowDebuffSpellIdByBuffSlot[slot] = spellId
     cache.buffs[slot] = { spellId = spellId, stacks = stacks }
     MarkActive(spellId, cache.activeBuffs, slot)
 
@@ -714,10 +740,12 @@ DebuffRemovedOtherFrame:SetScript("OnEvent", function()
   elseif auraSlot >= 0 and auraSlot < MAX_BUFF_SLOTS then
     local slot = auraSlot + 1
 	if state == 1 then
+	  cache.overflowDebuffSpellIdByBuffSlot[slot] = nil
 	  cache.buffs[slot] = nil
 	  MarkInactive(spellId, cache.activeBuffs, cache.buffs, MAX_BUFF_SLOTS, slot)
 	  cache.numActiveBuffs = cache.numActiveBuffs - 1
 	else
+      cache.overflowDebuffSpellIdByBuffSlot[slot] = spellId
       if cache.buffs[slot] then
         cache.buffs[slot].stacks = stacks
       else
