@@ -202,8 +202,7 @@ local function IsCurrentTargetPlayer()
     return false
   end
 
-  local _, playerGuid = UnitExists("player")
-  return playerGuid and DoiteTargetAuras.targetGuid == playerGuid
+  return UnitIsPlayer("target") and true or false
 end
 
 local function UpdateAuras()
