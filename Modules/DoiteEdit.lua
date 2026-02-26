@@ -12,6 +12,8 @@ end
 
 local condFrame = nil
 local currentKey = nil
+local EnsureDBEntry
+local ClearDropdown
 local SafeRefresh
 local SafeEvaluate
 local srows
@@ -35,6 +37,108 @@ local VfxCond_Managers = {}
 local VfxCond_RegisterManager
 local VfxCond_RefreshFromDB
 local VfxCond_ResetEditing
+
+local SOUND_FILES = {
+  "Arrow_Swoosh.ogg", "BITE.ogg", "ESPARK1.ogg", "Fireball.ogg", "Gasp.ogg",
+  "Hit1.ogg", "Hit2.ogg", "Hit3.ogg", "Hit4.ogg", "Hit5.ogg", "Hit6.ogg", "Hit7.ogg", "Hit8.ogg",
+  "PUNCH.ogg", "Squeakypig.ogg", "aggro.ogg", "bam.ogg", "bear_polar.ogg", "bigkiss.ogg", "burp4.ogg",
+  "cat2.ogg", "chant2.ogg", "chant4.ogg", "chimes.ogg", "cookie.ogg", "heartbeat.ogg", "hic3.ogg",
+  "huh_1.ogg", "hurricane.ogg", "hyena.ogg", "kaching.ogg", "moan.ogg", "panther1.ogg", "phone.ogg",
+  "rainroof.ogg", "rocket.ogg", "shipswhistle.ogg", "shot.ogg", "snakeatt.ogg", "sneeze.ogg", "sonar.ogg",
+  "splash.ogg", "swordecho.ogg", "throwknife.ogg", "thunder.ogg", "wickedmalelaugh1.ogg", "wilhelm.ogg",
+  "wlaugh.ogg", "wolf5.ogg", "yeehaw.ogg"
+}
+
+local function DoiteEdit_SetDropdownInteractive(dd, enabled)
+  if not dd then
+    return
+  end
+  if enabled then
+    if UIDropDownMenu_EnableDropDown then
+      pcall(UIDropDownMenu_EnableDropDown, dd)
+    end
+  else
+    if UIDropDownMenu_DisableDropDown then
+      pcall(UIDropDownMenu_DisableDropDown, dd)
+    end
+  end
+end
+
+local function DoiteEdit_SetSoundFromDropdown(typeKey, eventKey, value)
+  if not currentKey then
+    return
+  end
+  local d = EnsureDBEntry(currentKey)
+  d.conditions = d.conditions or {}
+  d.conditions[typeKey] = d.conditions[typeKey] or {}
+  d.conditions[typeKey][eventKey] = value
+  SafeRefresh();
+  SafeEvaluate()
+end
+
+local function DoiteEdit_SetSoundEnabled(typeKey, enabledKey, enabled)
+  if not currentKey then
+    return
+  end
+  local d = EnsureDBEntry(currentKey)
+  d.conditions = d.conditions or {}
+  d.conditions[typeKey] = d.conditions[typeKey] or {}
+  d.conditions[typeKey][enabledKey] = enabled and true or false
+  SafeRefresh();
+  SafeEvaluate()
+end
+
+local function DoiteEdit_InitSoundDropdown(dd, typeKey, eventKey, selectedValue)
+  if not dd then
+    return
+  end
+  ClearDropdown(dd)
+  UIDropDownMenu_Initialize(dd, function()
+    local info = UIDropDownMenu_CreateInfo()
+    info.text = "(none)"
+    info.value = ""
+    info.checked = (not selectedValue or selectedValue == "") and true or false
+    info.func = function()
+      UIDropDownMenu_SetSelectedValue(dd, "")
+      UIDropDownMenu_SetText("Select sound", dd)
+      DoiteEdit_SetSoundFromDropdown(typeKey, eventKey, nil)
+      if CloseDropDownMenus then
+        CloseDropDownMenus()
+      end
+    end
+    UIDropDownMenu_AddButton(info)
+
+    local i
+    for i = 1, table.getn(SOUND_FILES) do
+      local fname = SOUND_FILES[i]
+      local info2 = UIDropDownMenu_CreateInfo()
+      info2.text = fname
+      info2.value = fname
+      info2.checked = (selectedValue == fname)
+      info2.func = function(btn)
+        local picked = (btn and btn.value) or fname
+        UIDropDownMenu_SetSelectedValue(dd, picked)
+        UIDropDownMenu_SetText(picked, dd)
+        DoiteEdit_SetSoundFromDropdown(typeKey, eventKey, picked)
+        if CloseDropDownMenus then
+          CloseDropDownMenus()
+        end
+      end
+      UIDropDownMenu_AddButton(info2)
+    end
+  end)
+
+  if selectedValue and selectedValue ~= "" then
+    UIDropDownMenu_SetSelectedValue(dd, selectedValue)
+    UIDropDownMenu_SetText(selectedValue, dd)
+  else
+    UIDropDownMenu_SetSelectedValue(dd, "")
+    UIDropDownMenu_SetText("Select sound", dd)
+  end
+  if _GoldifyDD then
+    _GoldifyDD(dd)
+  end
+end
 
 -- class gate used by UpdateConditionsUI and others
 local function _IsRogueOrDruid()
@@ -319,7 +423,7 @@ _DoiteEdit_Throttle:SetScript("OnUpdate", function()
   end
 end)
 
-local function EnsureDBEntry(key)
+EnsureDBEntry = function(key)
   -- Ensure global categories table exists (shared across all icons)
   if DoiteAurasDB and not DoiteAurasDB.categories then
     DoiteAurasDB.categories = {}
@@ -528,7 +632,7 @@ local function EnsureDBEntry(key)
 end
 
 -- clear a dropdown so it can be safely re-initialized
-local function ClearDropdown(dd)
+ClearDropdown = function(dd)
   if not dd then
     return
   end
@@ -1796,17 +1900,33 @@ local function CreateConditionsUI()
   condFrame.cond_ability_class_note:SetText("No class-specific option added for your class.")
   condFrame.cond_ability_class_note:Hide()
 
+  -- Ability: Sound effects
+  condFrame.cond_ability_sound_oncd_cb = MakeCheck("DoiteCond_Ability_Sound_OnCD_CB", "On cooldown", 0, row12_y)
+  condFrame.cond_ability_sound_oncd_dd = CreateFrame("Frame", "DoiteCond_Ability_Sound_OnCD_DD", _Parent(), "UIDropDownMenuTemplate")
+  condFrame.cond_ability_sound_oncd_dd:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 130, row12_y + 3)
+  if UIDropDownMenu_SetWidth then
+    pcall(UIDropDownMenu_SetWidth, 140, condFrame.cond_ability_sound_oncd_dd)
+  end
+
+  condFrame.cond_ability_sound_offcd_cb = MakeCheck("DoiteCond_Ability_Sound_OffCD_CB", "Off cooldown", 0, row13_y)
+  condFrame.cond_ability_sound_offcd_dd = CreateFrame("Frame", "DoiteCond_Ability_Sound_OffCD_DD", _Parent(), "UIDropDownMenuTemplate")
+  condFrame.cond_ability_sound_offcd_dd:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 130, row13_y + 3)
+  if UIDropDownMenu_SetWidth then
+    pcall(UIDropDownMenu_SetWidth, 140, condFrame.cond_ability_sound_offcd_dd)
+  end
+  SetSeparator("ability", 12, "SOUND EFFECTS", true, true)
+
   -- Ability: dynamic Aura Conditions section
-  local abilityAuraBaseY = row12_y
-  SetSeparator("ability", 12, "EXTRA: VISIBILITY (SHOW/HIDE) CONDITIONS", true, true)
+  local abilityAuraBaseY = row14_y
+  SetSeparator("ability", 14, "EXTRA: VISIBILITY (SHOW/HIDE) CONDITIONS", true, true)
   condFrame.abilityAuraAnchor = CreateFrame("Frame", nil, _Parent())
   condFrame.abilityAuraAnchor:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 0, abilityAuraBaseY)
   condFrame.abilityAuraAnchor:SetPoint("TOPRIGHT", _Parent(), "TOPRIGHT", 0, abilityAuraBaseY)
   condFrame.abilityAuraAnchor:SetHeight(20)
 
   -- Ability: dynamic Visual Effects Conditions section
-  local abilityVfxBaseY = row13_y
-  SetSeparator("ability", 13, "EXTRA: VISUAL EFFECT (GLOW/GREY) CONDITIONS", true, true)
+  local abilityVfxBaseY = row15_y
+  SetSeparator("ability", 15, "EXTRA: VISUAL EFFECT (GLOW/GREY) CONDITIONS", true, true)
   condFrame.abilityVfxAnchor = CreateFrame("Frame", nil, _Parent())
   condFrame.abilityVfxAnchor:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 0, abilityVfxBaseY)
   condFrame.abilityVfxAnchor:SetPoint("TOPRIGHT", _Parent(), "TOPRIGHT", 0, abilityVfxBaseY)
@@ -2029,24 +2149,47 @@ local function CreateConditionsUI()
   condFrame.cond_aura_class_note:SetText("No class-specific option added for your class.")
   condFrame.cond_aura_class_note:Hide()
 
-  local sepAuraBuff = SetSeparator("aura", 13, "EXTRA: VISIBILITY (SHOW/HIDE) CONDITIONS", true, true)
-  if sepAuraBuff and srows then
+  -- Aura: Sound effects
+  condFrame.cond_aura_sound_ongain_cb = MakeCheck("DoiteCond_Aura_Sound_OnGain_CB", "On gain", 0, row13_y - 10)
+  condFrame.cond_aura_sound_ongain_dd = CreateFrame("Frame", "DoiteCond_Aura_Sound_OnGain_DD", _Parent(), "UIDropDownMenuTemplate")
+  condFrame.cond_aura_sound_ongain_dd:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 130, row13_y - 7)
+  if UIDropDownMenu_SetWidth then
+    pcall(UIDropDownMenu_SetWidth, 140, condFrame.cond_aura_sound_ongain_dd)
+  end
+
+  condFrame.cond_aura_sound_onfade_cb = MakeCheck("DoiteCond_Aura_Sound_OnFade_CB", "On fade", 0, row14_y - 10)
+  condFrame.cond_aura_sound_onfade_dd = CreateFrame("Frame", "DoiteCond_Aura_Sound_OnFade_DD", _Parent(), "UIDropDownMenuTemplate")
+  condFrame.cond_aura_sound_onfade_dd:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 130, row14_y - 7)
+  if UIDropDownMenu_SetWidth then
+    pcall(UIDropDownMenu_SetWidth, 140, condFrame.cond_aura_sound_onfade_dd)
+  end
+
+  local sepAuraSound = SetSeparator("aura", 13, "SOUND EFFECTS", true, true)
+  if sepAuraSound and srows then
     local newY = (srows[13] or 0) - 10
+    sepAuraSound:ClearAllPoints()
+    sepAuraSound:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 0, newY)
+    sepAuraSound:SetPoint("TOPRIGHT", _Parent(), "TOPRIGHT", 0, newY)
+  end
+
+  local sepAuraBuff = SetSeparator("aura", 14, "EXTRA: VISIBILITY (SHOW/HIDE) CONDITIONS", true, true)
+  if sepAuraBuff and srows then
+    local newY = (srows[14] or 0) - 10
     sepAuraBuff:ClearAllPoints()
     sepAuraBuff:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 0, newY)
     sepAuraBuff:SetPoint("TOPRIGHT", _Parent(), "TOPRIGHT", 0, newY)
   end
 
   -- Aura (Buff/Debuff): dynamic Aura Conditions section
-  local auraAuraBaseY = row13_y - 10
+  local auraAuraBaseY = row14_y - 10
   condFrame.auraAuraAnchor = CreateFrame("Frame", nil, _Parent())
   condFrame.auraAuraAnchor:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 0, auraAuraBaseY)
   condFrame.auraAuraAnchor:SetPoint("TOPRIGHT", _Parent(), "TOPRIGHT", 0, auraAuraBaseY)
   condFrame.auraAuraAnchor:SetHeight(20)
 
   -- Aura: dynamic Visual Effects Conditions section
-  local auraVfxBaseY = row14_y - 10
-  SetSeparator("aura", 14, "EXTRA: VISUAL EFFECT (GLOW/GREY) CONDITIONS", true, true)
+  local auraVfxBaseY = row15_y - 10
+  SetSeparator("aura", 15, "EXTRA: VISUAL EFFECT (GLOW/GREY) CONDITIONS", true, true)
   condFrame.auraVfxAnchor = CreateFrame("Frame", nil, _Parent())
   condFrame.auraVfxAnchor:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 0, auraVfxBaseY)
   condFrame.auraVfxAnchor:SetPoint("TOPRIGHT", _Parent(), "TOPRIGHT", 0, auraVfxBaseY)
@@ -2231,17 +2374,33 @@ local function CreateConditionsUI()
   condFrame.cond_item_class_note:SetText("No class-specific option added for your class.")
   condFrame.cond_item_class_note:Hide()
 
+  -- Item: Sound effects
+  condFrame.cond_item_sound_oncd_cb = MakeCheck("DoiteCond_Item_Sound_OnCD_CB", "On cooldown", 0, row14_y)
+  condFrame.cond_item_sound_oncd_dd = CreateFrame("Frame", "DoiteCond_Item_Sound_OnCD_DD", _Parent(), "UIDropDownMenuTemplate")
+  condFrame.cond_item_sound_oncd_dd:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 130, row14_y + 3)
+  if UIDropDownMenu_SetWidth then
+    pcall(UIDropDownMenu_SetWidth, 140, condFrame.cond_item_sound_oncd_dd)
+  end
+
+  condFrame.cond_item_sound_offcd_cb = MakeCheck("DoiteCond_Item_Sound_OffCD_CB", "Off cooldown", 0, row15_y)
+  condFrame.cond_item_sound_offcd_dd = CreateFrame("Frame", "DoiteCond_Item_Sound_OffCD_DD", _Parent(), "UIDropDownMenuTemplate")
+  condFrame.cond_item_sound_offcd_dd:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 130, row15_y + 3)
+  if UIDropDownMenu_SetWidth then
+    pcall(UIDropDownMenu_SetWidth, 140, condFrame.cond_item_sound_offcd_dd)
+  end
+  SetSeparator("item", 14, "SOUND EFFECTS", true, true)
+
   -- Item: dynamic Aura Conditions section
-  local itemAuraBaseY = row14_y
-  SetSeparator("item", 14, "EXTRA: VISIBILITY (SHOW/HIDE) CONDITIONS", true, true)
+  local itemAuraBaseY = row16_y
+  SetSeparator("item", 16, "EXTRA: VISIBILITY (SHOW/HIDE) CONDITIONS", true, true)
   condFrame.itemAuraAnchor = CreateFrame("Frame", nil, _Parent())
   condFrame.itemAuraAnchor:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 0, itemAuraBaseY)
   condFrame.itemAuraAnchor:SetPoint("TOPRIGHT", _Parent(), "TOPRIGHT", 0, itemAuraBaseY)
   condFrame.itemAuraAnchor:SetHeight(20)
 
   -- Item: dynamic Visual Effects Conditions section
-  local itemVfxBaseY = row15_y
-  SetSeparator("item", 15, "EXTRA: VISUAL EFFECT (GLOW/GREY) CONDITIONS", true, true)
+  local itemVfxBaseY = row17_y
+  SetSeparator("item", 17, "EXTRA: VISUAL EFFECT (GLOW/GREY) CONDITIONS", true, true)
   condFrame.itemVfxAnchor = CreateFrame("Frame", nil, _Parent())
   condFrame.itemVfxAnchor:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 0, itemVfxBaseY)
   condFrame.itemVfxAnchor:SetPoint("TOPRIGHT", _Parent(), "TOPRIGHT", 0, itemVfxBaseY)
@@ -2842,6 +3001,93 @@ local function CreateConditionsUI()
 
     SetExclusiveItemMode(mode)
   end)
+
+  local function _AbilitySoundToggle(which)
+    if not currentKey then
+      return
+    end
+    local d = EnsureDBEntry(currentKey)
+    d.conditions = d.conditions or {}
+    d.conditions.ability = d.conditions.ability or {}
+
+    local cb = (which == "oncd") and condFrame.cond_ability_sound_oncd_cb or condFrame.cond_ability_sound_offcd_cb
+    local dd = (which == "oncd") and condFrame.cond_ability_sound_oncd_dd or condFrame.cond_ability_sound_offcd_dd
+    local field = (which == "oncd") and "soundOnCD" or "soundOffCD"
+    local enabledField = (which == "oncd") and "soundOnCDEnabled" or "soundOffCDEnabled"
+
+    local enabled = cb and cb.GetChecked and cb:GetChecked()
+    if enabled then
+      DoiteEdit_SetSoundEnabled("ability", enabledField, true)
+      DoiteEdit_SetDropdownInteractive(dd, true)
+    else
+      DoiteEdit_SetSoundEnabled("ability", enabledField, false)
+      d.conditions.ability[field] = nil
+      DoiteEdit_SetSoundFromDropdown("ability", field, nil)
+      DoiteEdit_InitSoundDropdown(dd, "ability", field, nil)
+      DoiteEdit_SetDropdownInteractive(dd, false)
+    end
+  end
+
+  condFrame.cond_ability_sound_oncd_cb:SetScript("OnClick", function() _AbilitySoundToggle("oncd") end)
+  condFrame.cond_ability_sound_offcd_cb:SetScript("OnClick", function() _AbilitySoundToggle("offcd") end)
+
+  local function _AuraSoundToggle(which)
+    if not currentKey then
+      return
+    end
+    local d = EnsureDBEntry(currentKey)
+    d.conditions = d.conditions or {}
+    d.conditions.aura = d.conditions.aura or {}
+
+    local cb = (which == "ongain") and condFrame.cond_aura_sound_ongain_cb or condFrame.cond_aura_sound_onfade_cb
+    local dd = (which == "ongain") and condFrame.cond_aura_sound_ongain_dd or condFrame.cond_aura_sound_onfade_dd
+    local field = (which == "ongain") and "soundOnGain" or "soundOnFade"
+    local enabledField = (which == "ongain") and "soundOnGainEnabled" or "soundOnFadeEnabled"
+
+    local enabled = cb and cb.GetChecked and cb:GetChecked()
+    if enabled then
+      DoiteEdit_SetSoundEnabled("aura", enabledField, true)
+      DoiteEdit_SetDropdownInteractive(dd, true)
+    else
+      DoiteEdit_SetSoundEnabled("aura", enabledField, false)
+      d.conditions.aura[field] = nil
+      DoiteEdit_SetSoundFromDropdown("aura", field, nil)
+      DoiteEdit_InitSoundDropdown(dd, "aura", field, nil)
+      DoiteEdit_SetDropdownInteractive(dd, false)
+    end
+  end
+
+  condFrame.cond_aura_sound_ongain_cb:SetScript("OnClick", function() _AuraSoundToggle("ongain") end)
+  condFrame.cond_aura_sound_onfade_cb:SetScript("OnClick", function() _AuraSoundToggle("onfade") end)
+
+  local function _ItemSoundToggle(which)
+    if not currentKey then
+      return
+    end
+    local d = EnsureDBEntry(currentKey)
+    d.conditions = d.conditions or {}
+    d.conditions.item = d.conditions.item or {}
+
+    local cb = (which == "oncd") and condFrame.cond_item_sound_oncd_cb or condFrame.cond_item_sound_offcd_cb
+    local dd = (which == "oncd") and condFrame.cond_item_sound_oncd_dd or condFrame.cond_item_sound_offcd_dd
+    local field = (which == "oncd") and "soundOnCD" or "soundOffCD"
+    local enabledField = (which == "oncd") and "soundOnCDEnabled" or "soundOffCDEnabled"
+
+    local enabled = cb and cb.GetChecked and cb:GetChecked()
+    if enabled then
+      DoiteEdit_SetSoundEnabled("item", enabledField, true)
+      DoiteEdit_SetDropdownInteractive(dd, true)
+    else
+      DoiteEdit_SetSoundEnabled("item", enabledField, false)
+      d.conditions.item[field] = nil
+      DoiteEdit_SetSoundFromDropdown("item", field, nil)
+      DoiteEdit_InitSoundDropdown(dd, "item", field, nil)
+      DoiteEdit_SetDropdownInteractive(dd, false)
+    end
+  end
+
+  condFrame.cond_item_sound_oncd_cb:SetScript("OnClick", function() _ItemSoundToggle("oncd") end)
+  condFrame.cond_item_sound_offcd_cb:SetScript("OnClick", function() _ItemSoundToggle("offcd") end)
   
   condFrame.cond_item_clickable:SetScript("OnClick", function()
     if not currentKey then
@@ -7849,6 +8095,24 @@ local function UpdateConditionsUI(data)
 
   local c = data.conditions
 
+  local function _HideSoundControls()
+    local list = {
+      condFrame.cond_ability_sound_oncd_cb, condFrame.cond_ability_sound_oncd_dd,
+      condFrame.cond_ability_sound_offcd_cb, condFrame.cond_ability_sound_offcd_dd,
+      condFrame.cond_aura_sound_ongain_cb, condFrame.cond_aura_sound_ongain_dd,
+      condFrame.cond_aura_sound_onfade_cb, condFrame.cond_aura_sound_onfade_dd,
+      condFrame.cond_item_sound_oncd_cb, condFrame.cond_item_sound_oncd_dd,
+      condFrame.cond_item_sound_offcd_cb, condFrame.cond_item_sound_offcd_dd,
+    }
+    local i
+    for i = 1, table.getn(list) do
+      if list[i] and list[i].Hide then
+        list[i]:Hide()
+      end
+    end
+  end
+  _HideSoundControls()
+
   -- Custom controls are hidden by default; shown only for Custom type.
   if condFrame.cond_custom_function_edit then
     condFrame.cond_custom_function_edit:Hide()
@@ -7943,6 +8207,10 @@ local function UpdateConditionsUI(data)
     condFrame.cond_ability_target_help:Show()
     condFrame.cond_ability_target_harm:Show()
     condFrame.cond_ability_target_self:Show()
+    condFrame.cond_ability_sound_oncd_cb:Show()
+    condFrame.cond_ability_sound_oncd_dd:Show()
+    condFrame.cond_ability_sound_offcd_cb:Show()
+    condFrame.cond_ability_sound_offcd_dd:Show()
     condFrame.cond_ability_power:Show()
     condFrame.cond_ability_glow:Show()
     condFrame.cond_ability_greyscale:Show()
@@ -8019,6 +8287,28 @@ local function UpdateConditionsUI(data)
     if condFrame.cond_ability_target_dead then
       condFrame.cond_ability_target_dead:SetChecked(td)
       condFrame.cond_ability_target_dead:Show()
+    end
+
+    local aSoundOn = (c.ability and c.ability.soundOnCDEnabled) == true
+    local aSoundOff = (c.ability and c.ability.soundOffCDEnabled) == true
+    local aOnCds = (c.ability and c.ability.soundOnCD) or nil
+    local aOffCds = (c.ability and c.ability.soundOffCD) or nil
+    condFrame.cond_ability_sound_oncd_cb:SetChecked(aSoundOn)
+    condFrame.cond_ability_sound_offcd_cb:SetChecked(aSoundOff)
+    DoiteEdit_InitSoundDropdown(condFrame.cond_ability_sound_oncd_dd, "ability", "soundOnCD", aOnCds)
+    DoiteEdit_InitSoundDropdown(condFrame.cond_ability_sound_offcd_dd, "ability", "soundOffCD", aOffCds)
+    DoiteEdit_EnableCheck(condFrame.cond_ability_sound_oncd_cb)
+    DoiteEdit_EnableCheck(condFrame.cond_ability_sound_offcd_cb)
+    if aSoundOn then
+      DoiteEdit_EnableCheck(condFrame.cond_ability_sound_oncd_cb)
+      DoiteEdit_SetDropdownInteractive(condFrame.cond_ability_sound_oncd_dd, true)
+    else
+      DoiteEdit_SetDropdownInteractive(condFrame.cond_ability_sound_oncd_dd, false)
+    end
+    if aSoundOff then
+      DoiteEdit_SetDropdownInteractive(condFrame.cond_ability_sound_offcd_dd, true)
+    else
+      DoiteEdit_SetDropdownInteractive(condFrame.cond_ability_sound_offcd_dd, false)
     end
 
     -- === TARGET DISTANCE & TYPE (Ability) ===
@@ -8784,8 +9074,25 @@ local ic = c.item or {}
     -- USABILITY & COOLDOWN
     condFrame.cond_item_notcd:Show()
     condFrame.cond_item_oncd:Show()
+    condFrame.cond_item_sound_oncd_cb:Show()
+    condFrame.cond_item_sound_oncd_dd:Show()
+    condFrame.cond_item_sound_offcd_cb:Show()
+    condFrame.cond_item_sound_offcd_dd:Show()
 
     _enCheck(condFrame.cond_item_notcd)
+
+    local iSoundOn = (ic.soundOnCDEnabled == true)
+    local iSoundOff = (ic.soundOffCDEnabled == true)
+    local iSoundOnSel = ic.soundOnCD
+    local iSoundOffSel = ic.soundOffCD
+    condFrame.cond_item_sound_oncd_cb:SetChecked(iSoundOn)
+    condFrame.cond_item_sound_offcd_cb:SetChecked(iSoundOff)
+    DoiteEdit_InitSoundDropdown(condFrame.cond_item_sound_oncd_dd, "item", "soundOnCD", iSoundOnSel)
+    DoiteEdit_InitSoundDropdown(condFrame.cond_item_sound_offcd_dd, "item", "soundOffCD", iSoundOffSel)
+    DoiteEdit_EnableCheck(condFrame.cond_item_sound_oncd_cb)
+    DoiteEdit_EnableCheck(condFrame.cond_item_sound_offcd_cb)
+    DoiteEdit_SetDropdownInteractive(condFrame.cond_item_sound_oncd_dd, iSoundOn)
+    DoiteEdit_SetDropdownInteractive(condFrame.cond_item_sound_offcd_dd, iSoundOff)
     _enCheck(condFrame.cond_item_oncd)
     
     -- CLICKABLE
@@ -9630,6 +9937,10 @@ local ic = c.item or {}
     condFrame.cond_aura_target_help:Show()
     condFrame.cond_aura_target_harm:Show()
     condFrame.cond_aura_onself:Show()
+    condFrame.cond_aura_sound_ongain_cb:Show()
+    condFrame.cond_aura_sound_ongain_dd:Show()
+    condFrame.cond_aura_sound_onfade_cb:Show()
+    condFrame.cond_aura_sound_onfade_dd:Show()
     condFrame.cond_aura_glow:Show()
     condFrame.cond_aura_greyscale:Show()
 
@@ -9777,6 +10088,19 @@ local ic = c.item or {}
 
     condFrame.cond_aura_glow:SetChecked((c.aura and c.aura.glow) or false)
     condFrame.cond_aura_greyscale:SetChecked((c.aura and c.aura.greyscale) or false)
+
+    local auraSoundGainOn = (c.aura and c.aura.soundOnGainEnabled) == true
+    local auraSoundFadeOn = (c.aura and c.aura.soundOnFadeEnabled) == true
+    local auraSoundGain = (c.aura and c.aura.soundOnGain) or nil
+    local auraSoundFade = (c.aura and c.aura.soundOnFade) or nil
+    condFrame.cond_aura_sound_ongain_cb:SetChecked(auraSoundGainOn)
+    condFrame.cond_aura_sound_onfade_cb:SetChecked(auraSoundFadeOn)
+    DoiteEdit_InitSoundDropdown(condFrame.cond_aura_sound_ongain_dd, "aura", "soundOnGain", auraSoundGain)
+    DoiteEdit_InitSoundDropdown(condFrame.cond_aura_sound_onfade_dd, "aura", "soundOnFade", auraSoundFade)
+    DoiteEdit_EnableCheck(condFrame.cond_aura_sound_ongain_cb)
+    DoiteEdit_EnableCheck(condFrame.cond_aura_sound_onfade_cb)
+    DoiteEdit_SetDropdownInteractive(condFrame.cond_aura_sound_ongain_dd, auraSoundGainOn)
+    DoiteEdit_SetDropdownInteractive(condFrame.cond_aura_sound_onfade_dd, auraSoundFadeOn)
 
     local isBuff = (data.type == "Buff")
 
