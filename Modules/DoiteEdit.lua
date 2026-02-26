@@ -50,6 +50,50 @@ local SOUND_FILES = {
   "wlaugh.ogg", "wolf5.ogg", "yeehaw.ogg"
 }
 
+local _sortedSoundFiles = nil
+local _soundDDReopenFrame = CreateFrame("Frame", "DoiteEditSoundDDReopenFrame")
+local _soundDDToReopen = nil
+
+_soundDDReopenFrame:Hide()
+_soundDDReopenFrame:SetScript("OnUpdate", function()
+  _soundDDReopenFrame:Hide()
+  if not _soundDDToReopen then
+    return
+  end
+  local dd = _soundDDToReopen
+  _soundDDToReopen = nil
+  if not dd or not dd.GetName then
+    return
+  end
+  ToggleDropDownMenu(nil, nil, dd, dd, 0, 0)
+end)
+
+local function DoiteEdit_ReopenSoundDDNextFrame(dd)
+  _soundDDToReopen = dd
+  _soundDDReopenFrame:Show()
+end
+
+local function DoiteEdit_GetSortedSoundFiles()
+  if _sortedSoundFiles then
+    return _sortedSoundFiles
+  end
+
+  local list = {}
+  local i
+  for i = 1, table.getn(SOUND_FILES) do
+    list[i] = SOUND_FILES[i]
+  end
+
+  table.sort(list, function(a, b)
+    a = string.lower(a or "")
+    b = string.lower(b or "")
+    return a < b
+  end)
+
+  _sortedSoundFiles = list
+  return _sortedSoundFiles
+end
+
 local function DoiteEdit_SetDropdownInteractive(dd, enabled)
   if not dd then
     return
@@ -94,6 +138,22 @@ local function DoiteEdit_InitSoundDropdown(dd, typeKey, eventKey, selectedValue)
     return
   end
   ClearDropdown(dd)
+  local sounds = DoiteEdit_GetSortedSoundFiles()
+  local total = table.getn(sounds)
+  local perPage = 10
+  local maxPage = math.max(1, math.ceil(total / perPage))
+  local page = dd._soundPage or 1
+  if page < 1 then
+    page = 1
+  end
+  if page > maxPage then
+    page = maxPage
+  end
+  dd._soundPage = page
+
+  local startIndex = (page - 1) * perPage + 1
+  local endIndex = math.min(startIndex + perPage - 1, total)
+
   UIDropDownMenu_Initialize(dd, function()
     local info = UIDropDownMenu_CreateInfo()
     info.text = "(none)"
@@ -109,9 +169,22 @@ local function DoiteEdit_InitSoundDropdown(dd, typeKey, eventKey, selectedValue)
     end
     UIDropDownMenu_AddButton(info)
 
+    if page > 1 then
+      local prevInfo = UIDropDownMenu_CreateInfo()
+      prevInfo.text = "|cffffd000<<< PREVIOUS|r"
+      prevInfo.value = "PREV"
+      prevInfo.notCheckable = true
+      prevInfo.func = function()
+        dd._soundPage = page - 1
+        DoiteEdit_InitSoundDropdown(dd, typeKey, eventKey, selectedValue)
+        DoiteEdit_ReopenSoundDDNextFrame(dd)
+      end
+      UIDropDownMenu_AddButton(prevInfo)
+    end
+
     local i
-    for i = 1, table.getn(SOUND_FILES) do
-      local fname = SOUND_FILES[i]
+    for i = startIndex, endIndex do
+      local fname = sounds[i]
       local info2 = UIDropDownMenu_CreateInfo()
       info2.text = fname
       info2.value = fname
@@ -126,6 +199,19 @@ local function DoiteEdit_InitSoundDropdown(dd, typeKey, eventKey, selectedValue)
         end
       end
       UIDropDownMenu_AddButton(info2)
+    end
+
+    if page < maxPage then
+      local nextInfo = UIDropDownMenu_CreateInfo()
+      nextInfo.text = "|cffffd000NEXT >>>|r"
+      nextInfo.value = "NEXT"
+      nextInfo.notCheckable = true
+      nextInfo.func = function()
+        dd._soundPage = page + 1
+        DoiteEdit_InitSoundDropdown(dd, typeKey, eventKey, selectedValue)
+        DoiteEdit_ReopenSoundDDNextFrame(dd)
+      end
+      UIDropDownMenu_AddButton(nextInfo)
     end
   end)
 
