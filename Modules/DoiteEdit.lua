@@ -19,6 +19,7 @@ local SafeEvaluate
 local srows
 local ShowSeparatorsForType
 local SetSeparator
+local SetGroupMode
 local DEFAULT_CUSTOM_FUNCTION_SOURCE
 local _ReflowCondAreaHeight
 
@@ -1239,7 +1240,7 @@ local function _DeriveGroupingMode(t)
   return nil
 end
 
-local function SetGroupMode(typeTable, mode)
+SetGroupMode = function(typeTable, mode)
   if not currentKey then
     return
   end
