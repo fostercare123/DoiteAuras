@@ -25,21 +25,47 @@ local UnitIsFriend = UnitIsFriend
 local UnitCanAttack = UnitCanAttack
 local UnitIsUnit = UnitIsUnit
 local UnitClass = UnitClass
-local UnitName = UnitName
-local UnitHealth = UnitHealth
-local UnitHealthMax = UnitHealthMax
 local UnitMana = UnitMana
-local UnitManaMax = UnitManaMax
-local GetComboPoints = GetComboPoints
-local GetNumTalentTabs = GetNumTalentTabs
 local GetNumTalents = GetNumTalents
 local GetTalentInfo = GetTalentInfo
-local _GetTime = GetTime
 local _GetAuraStacksOnUnit
 local _StacksPasses
 local str_find = string.find
 local str_gsub = string.gsub
 local SpellUsableArgCache = {}
+local _SoundStateByKey = {}
+
+local function _DoitePlayConfiguredSound(fileName)
+  if not fileName or fileName == "" then
+    return
+  end
+  if not PlaySoundFile then
+    return
+  end
+  local path = "Interface\\AddOns\\DoiteAuras\\Sounds\\" .. fileName
+  pcall(PlaySoundFile, path)
+end
+
+local function _DoiteHandleEdgeSound(key, stateKey, nowActive, enabledFlag, fileName)
+  if not key or not stateKey then
+    return
+  end
+  local st = _SoundStateByKey[key]
+  if not st then
+    st = {}
+    _SoundStateByKey[key] = st
+  end
+
+  local prev = st[stateKey]
+  st[stateKey] = nowActive and true or false
+
+  if prev == nil then
+    return
+  end
+  if (not prev) and nowActive and enabledFlag and fileName and fileName ~= "" then
+    _DoitePlayConfiguredSound(fileName)
+  end
+end
 
 -- Nampower Returns: name, texturePath (either may be nil)
 local function _NP_SpellNameAndTexture(spellId)
@@ -118,7 +144,7 @@ end
 
 local function _Now()
 
-  return (_GetTime and _GetTime()) or 0
+  return (GetTime and GetTime()) or 0
 end
 
 -- Spell index cache (must be defined before any usage)
@@ -163,7 +189,6 @@ local function _GetSpellIndexByName(spellName)
   SpellIndexCache[spellName] = false
   return nil
 end
-
 
 -- Dirty flags used by the central update loop
 local dirty_ability = false
@@ -4748,9 +4773,6 @@ local function _RebuildTargetModsFlags()
   end
 end
 
----------------------------------------------------------------
--- Ability condition evaluation
----------------------------------------------------------------
 local _DA_SWIFTMEND_NEEDS = { "Rejuvenation", "Regrowth" }
 
 local function _EvaluateVfxConditions(data)
@@ -4779,55 +4801,61 @@ local function _EvaluateVfxConditions(data)
   return glowOut, greyOut
 end
 
+-- ============================================================
+-- Ability condition evaluation
+-- ============================================================
 local function CheckAbilityConditions(data)
   if not data or not data.conditions or not data.conditions.ability then
     return true -- if no conditions, always show
   end
   local c = data.conditions.ability
-  -- Precompute target flags (used by Swiftmend guard and generic target gating)
-  local allowHelp = (c.targetHelp == true)
-  local allowHarm = (c.targetHarm == true)
-  local allowSelf = (c.targetSelf == true)
+  -- Consolidated context table: keeps local count lower while preserving hot-path local access.
+  local ctx = {
+    allowHelp = (c.targetHelp == true),
+    allowHarm = (c.targetHarm == true),
+    allowSelf = (c.targetSelf == true),
+    spellName = _GetCanonicalSpellNameFromData(data),
+    spellIndex = nil,
+    tf = nil,
+  }
+  ctx.spellIndex = _GetSpellIndexByName(ctx.spellName)
 
-  -- While editing this key, force conditions to pass (always show). Keeps group reflow and any "show"-based logic consistent.
+  -- While editing this key, force conditions to pass (always show).
   if _IsKeyUnderEdit(data.key) then
     local glow = (c.glow and true) or false
     local grey = (c.greyscale and true) or false
     return true, glow, grey
   end
 
+  -- "show" now represents ALL NON-MODE conditions.
   local show = true
+  data._daModeOk = true
+  data._daSoundGate = nil
 
   -- === Slider guard for cooldown slider preview ========================
-  -- The slider is allowed to "preview show" even when cooldown/usability would hide the icon, BUT it must still respect:
-  --   * form
-  --   * weaponFilter
-  --   * auraConditions
-  --
-  -- Cache the result on the data table so ApplyVisuals/_HandleAbilitySlider can suppress the slider without re-evaluating the whole ability logic.
   data._daSliderGuard = nil
-  local _sgFormPass, _sgWeaponPass, _sgAuraPass = nil, nil, nil
+  local _sg = { form = nil, weapon = nil, aura = nil }
 
   if c.slider == true and (c.mode == "usable" or c.mode == "notcd") then
     local okSlider = true
 
     if c.form and c.form ~= "All" then
-      _sgFormPass = DoiteConditions_PassesFormRequirement(c.form) and true or false
-      if not _sgFormPass then
+      _sg.form = DoiteConditions_PassesFormRequirement(c.form) and true or false
+      if not _sg.form then
         okSlider = false
       end
     end
 
     if okSlider and c.weaponFilter and c.weaponFilter ~= "" then
-      _sgWeaponPass = DoiteConditions_PassesWeaponFilter(c) and true or false
-      if not _sgWeaponPass then
+      _sg.weapon = DoiteConditions_PassesWeaponFilter(c) and true or false
+      if not _sg.weapon then
         okSlider = false
       end
     end
 
     if okSlider and c.auraConditions and table.getn(c.auraConditions) > 0 then
-      _sgAuraPass = DoiteConditions_EvaluateAuraConditionsList(c.auraConditions) and true or false
-      if not _sgAuraPass then
+      _sg.aura = DoiteConditions_EvaluateAuraConditionsList(c.auraConditions) and true or false
+      if not _sg.aura then
         okSlider = false
       end
     end
@@ -4835,53 +4863,49 @@ local function CheckAbilityConditions(data)
     data._daSliderGuard = okSlider and true or false
   end
 
-  -- === 1. Cooldown / usability ===
-  local spellName = _GetCanonicalSpellNameFromData(data)
-  local spellIndex = _GetSpellIndexByName(spellName)
+  -- === 1. Cooldown / usability (MODE-ONLY) ===
+  local spellName = ctx.spellName
+  local spellIndex = ctx.spellIndex
   local bookType = BOOKTYPE_SPELL
-  local foundInBook = (spellIndex ~= nil)
+  local onCdNow = false
 
-  if not foundInBook then
+  if not spellIndex then
+    -- Not in book: no icon, no sound.
+    data._daModeOk = false
+    data._daSoundGate = false
     return false
   end
+
+  onCdNow = _IsSpellOnCooldown(spellIndex, bookType) and true or false
 
   if c.mode == "usable" and spellIndex then
     local _, cls = UnitClass("player");
     cls = cls and string.upper(cls) or ""
-    local onCooldown = _IsSpellOnCooldown(spellIndex, bookType)
-
-    -- === WARRIOR override for Overpower/Revenge ===
     if cls == "WARRIOR" and (spellName == "Overpower" or spellName == "Revenge") then
-      if onCooldown then
-        show = false
+      if onCdNow then
+        data._daModeOk = false
       else
         local rage = UnitMana("player") or 0
         if rage < 5 then
-          show = false
+          data._daModeOk = false
         else
           if spellName == "Overpower" then
-            -- Require current target to be the dodger, window <= 5s
-            show = _Warrior_Overpower_OK()
+            data._daModeOk = _Warrior_Overpower_OK() and true or false
           else
-            -- "Revenge"
-            -- Any target OK, window <= 5s
-            show = _Warrior_Revenge_OK()
+            data._daModeOk = _Warrior_Revenge_OK() and true or false
           end
         end
       end
     else
-      -- ===== Normal usable logic (all other classes/spells) =====
       local usable, noMana = _SafeSpellUsable(spellName, spellIndex, bookType)
-
-      if (usable ~= 1) or (noMana == 1) or onCooldown then
-        show = false
+      if (usable ~= 1) or (noMana == 1) or onCdNow then
+        data._daModeOk = false
       else
-        -- === Usable special cases (guards) ===
         if cls == "DRUID" and spellName == "Swiftmend" then
           local needs = _DA_SWIFTMEND_NEEDS
           local ok = false
 
-          if allowHelp and not allowSelf then
+          if ctx.allowHelp and not ctx.allowSelf then
             if UnitExists("target")
                 and UnitIsFriend("player", "target")
                 and (not UnitIsUnit("player", "target")) then
@@ -4890,9 +4914,8 @@ local function CheckAbilityConditions(data)
               ok = false
             end
 
-          elseif allowSelf and not (allowHelp or allowHarm) then
+          elseif ctx.allowSelf and not (ctx.allowHelp or ctx.allowHarm) then
             ok = false
-
             for _, name in pairs(needs) do
               if DoitePlayerAuras.IsActive(name) then
                 ok = true
@@ -4920,29 +4943,27 @@ local function CheckAbilityConditions(data)
           end
 
           if not ok then
-            show = false
+            data._daModeOk = false
           end
         end
       end
     end
 
-
   elseif c.mode == "notcd" and spellIndex then
-    if _IsSpellOnCooldown(spellIndex, bookType) then
-      show = false
+    if onCdNow then
+      data._daModeOk = false
     end
 
   elseif c.mode == "oncd" and spellIndex then
-    if not _IsSpellOnCooldown(spellIndex, bookType) then
-      show = false
+    if not onCdNow then
+      data._daModeOk = false
     end
   end
 
-  -- === Combat state ===
+  -- === Combat state (NON-MODE) ===
   local inCombatFlag = (c.inCombat == true)
   local outCombatFlag = (c.outCombat == true)
 
-  -- If both are checked, always allowed
   if not (inCombatFlag and outCombatFlag) then
     if inCombatFlag and not InCombat() then
       show = false
@@ -4952,87 +4973,69 @@ local function CheckAbilityConditions(data)
     end
   end
 
-  -- === Grouping mode (c.grouping) ===
+  -- === Grouping mode (NON-MODE) ===
   local grouping = c.grouping
-
   if grouping ~= nil and grouping ~= "any" then
     local groupOk = true
-
     if grouping == "nogroup" then
       groupOk = not InGroup()
-
     elseif grouping == "party" then
       groupOk = InPartyOnly()
-
     elseif grouping == "raid" then
       groupOk = InRaid()
-
     elseif grouping == "partyraid" then
       groupOk = InGroup()
-
     else
-      -- unknown value: safest is "fail closed"
       groupOk = false
     end
-
     if not groupOk then
       show = false
     end
   end
 
   -- Cache target facts once per evaluation
-  local tf = _DA_GetTargetFacts()
+  ctx.tf = _DA_GetTargetFacts()
+  local tf = ctx.tf
 
-  -- If nothing selected, do NOT gate on target at all.
+  -- Target gating (NON-MODE)
   local ok = true
-  if allowHelp or allowHarm or allowSelf then
+  if ctx.allowHelp or ctx.allowHarm or ctx.allowSelf then
     ok = false
-
-    -- Self: must be explicitly targeting player
-    if allowSelf and tf.exists and tf.isSelf then
+    if ctx.allowSelf and tf.exists and tf.isSelf then
       ok = true
     end
-
-    -- Help: friendly target (EXCLUDING self), requires a target
-    if (not ok) and allowHelp and tf.exists and tf.isFriend and (not tf.isSelf) then
+    if (not ok) and ctx.allowHelp and tf.exists and tf.isFriend and (not tf.isSelf) then
       ok = true
     end
-
-    -- Harm: hostile/attackable and not friendly, requires a target
-    if (not ok) and allowHarm and tf.exists and tf.canAttack and (not tf.isFriend) then
+    if (not ok) and ctx.allowHarm and tf.exists and tf.canAttack and (not tf.isFriend) then
       ok = true
     end
   end
-
   if not ok then
     show = false
   end
 
-  -- === Target status / Distance / UnitType (ability) ===================
+  -- Target status / Distance / UnitType (NON-MODE)
   if show and (c.targetDistance or c.targetUnitType or c.targetAlive or c.targetDead) then
     local unitForTarget = nil
     if tf.exists then
       unitForTarget = "target"
     end
-
     if unitForTarget then
-      -- 1) Alive / dead requirement (if configured)
       if not DoiteConditions_PassesTargetStatus(c, unitForTarget) then
         show = false
-        -- 2) Range filter (if configured)
       elseif not DoiteConditions_PassesTargetDistance(c, unitForTarget, spellName) then
         show = false
-        -- 3) Unit-type filter (if configured)
       elseif not DoiteConditions_PassesTargetUnitType(c, unitForTarget) then
         show = false
       end
     end
   end
 
-  -- === Form / Stance requirement (if set)
+  -- Form / stance (NON-MODE)
   if show and c.form and c.form ~= "All" then
-    if _sgFormPass ~= nil then
-      if not _sgFormPass then
+    if _sg.form ~= nil then
+      if not _sg.form then
         show = false
       end
     else
@@ -5042,10 +5045,10 @@ local function CheckAbilityConditions(data)
     end
   end
 
-  -- === Weapon filter (Two-Hand / Shield / Dual-Wield) ===
+  -- Weapon filter (NON-MODE)
   if show and c.weaponFilter and c.weaponFilter ~= "" then
-    if _sgWeaponPass ~= nil then
-      if not _sgWeaponPass then
+    if _sg.weapon ~= nil then
+      if not _sg.weapon then
         show = false
       end
     else
@@ -5055,29 +5058,26 @@ local function CheckAbilityConditions(data)
     end
   end
 
-  -- === HP threshold (% of max) — player or target
+  -- HP (NON-MODE)
   if show and c.hpComp and c.hpVal and c.hpMode and c.hpMode ~= "" then
     local hpTarget = nil
     if c.hpMode == "my" then
       hpTarget = "player"
     elseif c.hpMode == "target" then
-      -- Gate by target kind if user also set targetHelp/targetHarm/targetSelf
       if tf.exists then
-        -- Use already-computed allowHelp/allowHarm/allowSelf from above
-        if (allowHelp or allowHarm or allowSelf) then
+        if (ctx.allowHelp or ctx.allowHarm or ctx.allowSelf) then
           local okHP = true
-          if allowSelf then
+          if ctx.allowSelf then
             okHP = tf.isSelf
-          elseif allowHelp then
+          elseif ctx.allowHelp then
             okHP = tf.isFriend and (not tf.isSelf)
-          elseif allowHarm then
+          elseif ctx.allowHarm then
             okHP = tf.canAttack and (not tf.isFriend)
           end
-
-          if not okHP then
-            hpTarget = nil
-          else
+          if okHP then
             hpTarget = "target"
+          else
+            hpTarget = nil
           end
         else
           hpTarget = "target"
@@ -5094,7 +5094,7 @@ local function CheckAbilityConditions(data)
     end
   end
 
-  -- === Combo Points (Rogue/Druid only) ===
+  -- Combo points (NON-MODE)
   if show and c.cpEnabled == true and _PlayerUsesComboPoints() then
     local cp = _GetComboPointsSafe()
     local thr = tonumber(c.cpVal)
@@ -5105,8 +5105,7 @@ local function CheckAbilityConditions(data)
     end
   end
 
-
-  -- === Power threshold (% of max) ===
+  -- Power (NON-MODE)
   if show and c.powerEnabled
       and c.powerComp ~= nil and c.powerComp ~= ""
       and c.powerVal ~= nil and c.powerVal ~= "" then
@@ -5129,7 +5128,7 @@ local function CheckAbilityConditions(data)
     end
   end
 
-  -- === Remaining (cooldown time left) ===
+  -- Remaining (NON-MODE)
   if show and c.remainingEnabled
       and c.remainingComp and c.remainingComp ~= ""
       and c.remainingVal ~= nil and c.remainingVal ~= "" then
@@ -5137,8 +5136,6 @@ local function CheckAbilityConditions(data)
     local threshold = tonumber(c.remainingVal)
     if threshold then
       local rem = _AbilityRemainingSeconds(spellIndex, bookType)
-
-      -- the real remaining cooldown for this spellbook entry.
       if rem and rem > 0 then
         if not _RemainingPasses(rem, c.remainingComp, threshold) then
           show = false
@@ -5147,10 +5144,10 @@ local function CheckAbilityConditions(data)
     end
   end
 
-  -- === Aura Conditions (extra ability gating) ===========================
+  -- Aura conditions (NON-MODE)
   if show and c.auraConditions and table.getn(c.auraConditions) > 0 then
-    if _sgAuraPass ~= nil then
-      if not _sgAuraPass then
+    if _sg.aura ~= nil then
+      if not _sg.aura then
         show = false
       end
     else
@@ -5159,6 +5156,27 @@ local function CheckAbilityConditions(data)
       end
     end
   end
+
+  -- Sound gate = all NON-MODE conditions
+  data._daSoundGate = (show == true) and true or false
+
+  -- Final visibility includes MODE
+  if data._daModeOk == false then
+    show = false
+  end
+
+  _DoiteHandleEdgeSound(
+      data.key,
+      "abilityOnCd",
+      onCdNow,
+      (data._daSoundGate and c.soundOnCDEnabled == true),
+      c.soundOnCD)
+  _DoiteHandleEdgeSound(
+      data.key,
+      "abilityOffCd",
+      (not onCdNow),
+      (data._daSoundGate and c.soundOffCDEnabled == true),
+      c.soundOffCD)
 
   local vGlow, vGrey = _EvaluateVfxConditions(data)
   local glow = (c.glow or vGlow) and true or false
@@ -5172,17 +5190,15 @@ local function CheckAbilityConditions(data)
   return show, glow, grey
 end
 
-
----------------------------------------------------------------
+-- ============================================================
 -- Item condition evaluation
----------------------------------------------------------------
+-- ============================================================
 local function CheckItemConditions(data)
   if not data or not data.conditions or not data.conditions.item then
     return true, false, false
   end
   local c = data.conditions.item
 
-  -- While editing this key, force conditions to pass (always show)
   if _IsKeyUnderEdit(data.key) then
     local glow = (c.glow and true) or false
     local grey = (c.greyscale and true) or false
@@ -5190,70 +5206,48 @@ local function CheckItemConditions(data)
   end
 
   local show = true
+  data._daModeOk = true
+  data._daSoundGate = nil
 
-  -- Shared target flags
   local allowHelp = (c.targetHelp == true)
   local allowHarm = (c.targetHarm == true)
   local allowSelf = (c.targetSelf == true)
 
-  -- Cache target facts once per evaluation (1 local only; avoids Lua 5.0 local limit)
   local tf = _DA_GetTargetFacts()
 
-  -- --------------------------------------------------------------------
-  -- 1. Core item state (Whereabouts / inventorySlot + mode / cooldown)
-  -- --------------------------------------------------------------------
   local state = _EvaluateItemCoreState(data, c)
+  local itemOnCdNow = (state and state.hasItem and state.rem and state.rem > 0) and true or false
 
-  -- Whereabouts / inventorySlot gating
   if not state.passesWhere then
+    data._daModeOk = false
+    data._daSoundGate = false
     local glow = c.glow and true or false
     local grey = c.greyscale and true or false
     return false, glow, grey
   end
 
-  -- Mode ("oncd" / "notcd") gating
   if state.modeMatches == false then
-    local glow = c.glow and true or false
-    local grey = c.greyscale and true or false
-    return false, glow, grey
+    data._daModeOk = false
   end
 
-  -- --------------------------------------------------------------------
-  -- Enchant visibility for equipped weapon slots ("---EQUIPPED WEAPON SLOTS---")
-  --  * c.enchant == true  -> show only when a temp enchant is active
-  --  * c.enchant == false -> show only when NO temp enchant is active
-  --  * c.enchant == nil   -> do not gate
-  -- Uses state.teRem computed in _EvaluateItemCoreState (seconds; nil/0 when none/expired).
-  -- --------------------------------------------------------------------
   if c.enchant ~= nil then
     local dn = data.displayName or data.name
     if dn == "---EQUIPPED WEAPON SLOTS---" then
       local hasEnchant = (state and state.teRem and state.teRem > 0) and true or false
-
       if c.enchant == true then
         if not hasEnchant then
-          local glow = c.glow and true or false
-          local grey = c.greyscale and true or false
-          return false, glow, grey
+          show = false
         end
       else
-        -- c.enchant == false => inverse: only show when missing enchant
         if hasEnchant then
-          local glow = c.glow and true or false
-          local grey = c.greyscale and true or false
-          return false, glow, grey
+          show = false
         end
       end
     end
   end
 
-
-  -- --------------------------------------------------------------------
-  -- 2. Combat state
-  -- --------------------------------------------------------------------
   local inCombatFlag = (c.inCombat == true)
   local outCombatFlag = (c.outCombat == true)
-
   if not (inCombatFlag and outCombatFlag) then
     if inCombatFlag and not InCombat() then
       show = false
@@ -5263,69 +5257,47 @@ local function CheckItemConditions(data)
     end
   end
 
-  -- === Grouping mode (c.grouping) ===
   local grouping = c.grouping
-
   if grouping ~= nil and grouping ~= "any" then
     local groupOk = true
-
     if grouping == "nogroup" then
       groupOk = not InGroup()
-
     elseif grouping == "party" then
       groupOk = InPartyOnly()
-
     elseif grouping == "raid" then
       groupOk = InRaid()
-
     elseif grouping == "partyraid" then
       groupOk = InGroup()
-
     else
-      -- unknown value: safest is "fail closed"
       groupOk = false
     end
-
     if not groupOk then
       show = false
     end
   end
 
-  -- --------------------------------------------------------------------
-  -- 3. Target gating (same semantics as abilities)
-  -- --------------------------------------------------------------------
   if show and (allowHelp or allowHarm or allowSelf) then
     local ok = false
-
     if allowSelf and tf.exists and tf.isSelf then
       ok = true
     end
-
     if (not ok) and allowHelp and tf.exists and tf.isFriend and (not tf.isSelf) then
       ok = true
     end
-
     if (not ok) and allowHarm and tf.exists and tf.canAttack and (not tf.isFriend) then
       ok = true
     end
-
     if not ok then
       show = false
     end
   end
 
-  -- --------------------------------------------------------------------
-  -- Target status / Distance / UnitType (items)
-  -- --------------------------------------------------------------------
   if show and (c.targetDistance or c.targetUnitType or c.targetAlive or c.targetDead) then
     local unitForTarget = nil
-
     if tf.exists then
       unitForTarget = "target"
     end
-
     if unitForTarget then
-      -- Alive / dead requirement (if configured)
       if not DoiteConditions_PassesTargetStatus(c, unitForTarget) then
         show = false
       elseif not DoiteConditions_PassesTargetDistance(c, unitForTarget, nil) then
@@ -5336,27 +5308,18 @@ local function CheckItemConditions(data)
     end
   end
 
-  -- --------------------------------------------------------------------
-  -- Weapon filter (Two-Hand / Shield / Dual-Wield)
-  -- --------------------------------------------------------------------
   if show and c.weaponFilter and c.weaponFilter ~= "" then
     if not DoiteConditions_PassesWeaponFilter(c) then
       show = false
     end
   end
 
-  -- --------------------------------------------------------------------
-  -- Form / stance requirement
-  -- --------------------------------------------------------------------
   if show and c.form and c.form ~= "All" then
     if not DoiteConditions_PassesFormRequirement(c.form) then
       show = false
     end
   end
 
-  -- --------------------------------------------------------------------
-  -- 5. HP threshold (my / target) – same logic as abilities
-  -- --------------------------------------------------------------------
   if show and c.hpComp and c.hpVal and c.hpMode and c.hpMode ~= "" then
     local hpTarget = nil
     if c.hpMode == "my" then
@@ -5394,9 +5357,6 @@ local function CheckItemConditions(data)
     end
   end
 
-  -- --------------------------------------------------------------------
-  -- 6. Combo points (Rogue/Druid only) – same as abilities
-  -- --------------------------------------------------------------------
   if show and c.cpEnabled == true and _PlayerUsesComboPoints() then
     local cp = _GetComboPointsSafe()
     local thr = tonumber(c.cpVal)
@@ -5407,29 +5367,19 @@ local function CheckItemConditions(data)
     end
   end
 
-  -- --------------------------------------------------------------------
-  -- 7. Power (resource) threshold – same semantics as abilities
-  -- --------------------------------------------------------------------
   if show and c.powerEnabled
       and c.powerComp ~= nil and c.powerComp ~= ""
       and c.powerVal ~= nil and c.powerVal ~= "" then
-
     local valPct = GetPowerPercent()
     local targetPct = tonumber(c.powerVal) or 0
-    local comp = c.powerComp
-
-    if not _ValuePasses(valPct, comp, targetPct) then
+    if not _ValuePasses(valPct, c.powerComp, targetPct) then
       show = false
     end
   end
 
-  -- --------------------------------------------------------------------
-  -- 8. Stack / amount threshold (bags + equipped, respecting Whereabouts)
-  -- --------------------------------------------------------------------
   if show and c.stacksEnabled
       and c.stacksComp and c.stacksComp ~= ""
       and c.stacksVal ~= nil and c.stacksVal ~= "" then
-
     local threshold = tonumber(c.stacksVal)
     if threshold and state then
       local cnt = state.effectiveCount or 0
@@ -5439,23 +5389,14 @@ local function CheckItemConditions(data)
     end
   end
 
-  -- --------------------------------------------------------------------
-  -- 9. Remaining (item cooldown time left)
-  --     Editor only allows this when mode == "oncd" and not whereMissing.
-  --     Special-case: equipped weapon slots + mode=notcd/both => compare against temp enchant remaining.
-  -- --------------------------------------------------------------------
   if show and c.remainingEnabled
       and c.remainingComp and c.remainingComp ~= ""
       and c.remainingVal ~= nil and c.remainingVal ~= "" then
-
     local threshold = tonumber(c.remainingVal)
     if threshold then
-      -- Equipped weapon slots + notcd/both: use temp enchant remaining (seconds)
       if (c.mode == "notcd" or c.mode == "both")
           and (data.displayName == "---EQUIPPED WEAPON SLOTS---")
           and (c.inventorySlot == "MAINHAND" or c.inventorySlot == "OFFHAND" or c.inventorySlot == "RANGED") then
-
-        -- If there is NO temp enchant, ALWAYS hide (do not treat nil as 0).
         if (not state) or (not state.teRem) or state.teRem <= 0 then
           show = false
         else
@@ -5463,9 +5404,7 @@ local function CheckItemConditions(data)
             show = false
           end
         end
-
       else
-        -- Original behavior: only evaluate when actual item cooldown is > 0
         if state.rem and state.rem > 0 then
           if not _RemainingPasses(state.rem, c.remainingComp, threshold) then
             show = false
@@ -5475,12 +5414,29 @@ local function CheckItemConditions(data)
     end
   end
 
-  -- === Aura Conditions (extra item gating) ==============================
   if show and c.auraConditions and table.getn(c.auraConditions) > 0 then
     if not DoiteConditions_EvaluateAuraConditionsList(c.auraConditions) then
       show = false
     end
   end
+
+  data._daSoundGate = (show == true) and true or false
+  if data._daModeOk == false then
+    show = false
+  end
+
+  _DoiteHandleEdgeSound(
+      data.key,
+      "itemOnCd",
+      itemOnCdNow,
+      (data._daSoundGate and c.soundOnCDEnabled == true),
+      c.soundOnCD)
+  _DoiteHandleEdgeSound(
+      data.key,
+      "itemOffCd",
+      (not itemOnCdNow),
+      (data._daSoundGate and c.soundOffCDEnabled == true),
+      c.soundOffCD)
 
   local vGlow, vGrey = _EvaluateVfxConditions(data)
   local glow = (c.glow or vGlow) and true or false
@@ -5494,17 +5450,15 @@ local function CheckItemConditions(data)
   return show, glow, grey
 end
 
----------------------------------------------------------------
--- Aura condition evaluation (with caching)
----------------------------------------------------------------
-
+-- ============================================================
+-- Aura condition evaluation
+-- ============================================================
 local function CheckAuraConditions(data)
   if not data or not data.conditions or not data.conditions.aura then
     return true, false, false
   end
   local c = data.conditions.aura
 
-  -- While editing this key, force conditions to pass (always show).
   if _IsKeyUnderEdit(data.key) then
     local glow = (c.glow and true) or false
     local grey = (c.greyscale and true) or false
@@ -5513,33 +5467,31 @@ local function CheckAuraConditions(data)
 
   local name = data.displayName or data.name
   if not name then
+    data._daSoundGate = false
     return false, false, false
   end
 
-  -- Enforce correct aura type
   local wantBuff = (data.type == "Buff")
   local wantDebuff = (data.type == "Debuff")
   if not wantBuff and not wantDebuff then
-    -- Back-compat: if type missing, allow either
     wantBuff, wantDebuff = true, true
   end
 
-  -- multi-select booleans
   local allowHelp = (c.targetHelp == true)
   local allowHarm = (c.targetHarm == true)
   local allowSelf = (c.targetSelf == true)
 
-  -- If none selected, default to Self
   if (not allowHelp) and (not allowHarm) and (not allowSelf) then
     allowSelf = true
   end
-
-  -- Self is exclusive with Help/Harm
   if allowSelf then
     allowHelp, allowHarm = false, false
   end
 
-  -- Cache target facts once per evaluation (1 local only; avoids Lua 5.0 local limit)
+  local show = true
+  data._daModeOk = true
+  data._daSoundGate = nil
+
   local tf = _DA_GetTargetFacts()
 
   local ownerFilter = nil
@@ -5554,108 +5506,80 @@ local function CheckAuraConditions(data)
     ownerFilter = nil
   end
 
-  -- === Target gating (OR semantics for help/harm) ===
   local requiresTarget = (allowHelp or allowHarm) and (not allowSelf)
   if requiresTarget then
     if not tf.exists then
-      return false, false, false
-    end
-
-    local isFriend = tf.isFriend
-    local canAttack = tf.canAttack
-
-    local matchesAny = false
-
-    if allowHelp then
-      if isFriend then
-        -- allow friendly targets including self
+      show = false
+    else
+      local isFriend = tf.isFriend
+      local canAttack = tf.canAttack
+      local matchesAny = false
+      if allowHelp and isFriend then
         matchesAny = true
       end
-    end
-
-    if (not matchesAny) and allowHarm then
-      if canAttack and (not isFriend) then
+      if (not matchesAny) and allowHarm and canAttack and (not isFriend) then
         matchesAny = true
       end
-    end
-
-    if not matchesAny then
-      return false, false, false
+      if not matchesAny then
+        show = false
+      end
     end
   end
 
   local found = false
 
-  -- Self auras — aura on player, regardless of target
-  if (not found) and allowSelf then
+  if show and allowSelf then
     local hit = false
-
     if wantBuff then
       hit = DoitePlayerAuras.HasBuff(name)
     end
-
     if (not hit) and wantDebuff then
       hit = DoitePlayerAuras.HasDebuff(name)
     end
-
     if hit then
       found = true
     end
   end
 
-  -- Target (help) — requires friendly target (already gated above)
-  if (not found) and allowHelp then
+  if show and (not found) and allowHelp then
     local s = auraSnapshot.target
     if s then
       local hit = false
-
-      -- Buff-type icons: unchanged.
       if wantBuff and s.buffs[name] then
         hit = true
-        -- Debuff-type icons: overflow-aware.
       elseif wantDebuff and _TargetHasOverflowDebuff(name) then
         hit = true
       end
-
       if hit then
         found = true
       end
     end
   end
 
-  -- Target (harm) — requires hostile target (already gated above)
-  if (not found) and allowHarm then
+  if show and (not found) and allowHarm then
     local s = auraSnapshot.target
     if s then
       local hit = false
-
-      -- Buff-type icons: unchanged.
       if wantBuff and s.buffs[name] then
         hit = true
-        -- Debuff-type icons: overflow-aware.
       elseif wantDebuff and _TargetHasOverflowDebuff(name) then
         hit = true
       end
-
       if hit then
         found = true
       end
     end
   end
 
-  -- === DoiteTrack aura owner filter ("My Aura" / "Others Aura") ===
-  if found and ownerFilter and DoiteTrack then
+  if show and found and ownerFilter and DoiteTrack then
     local ownerUnit = nil
-
     if allowSelf then
       ownerUnit = "player"
     elseif (allowHelp or allowHarm) and UnitExists("target") then
       ownerUnit = "target"
     end
-
     if ownerUnit then
       local _, _, _, isMine, isOther, mineKnown = _DoiteTrackAuraOwnership(name, ownerUnit)
-
       if mineKnown then
         if ownerFilter == "mine" and not isMine then
           found = false
@@ -5666,16 +5590,13 @@ local function CheckAuraConditions(data)
     end
   end
 
-  -- Decide show based on mode first
-  local show
+  -- MODE-ONLY visibility
   if c.mode == "missing" then
-    show = (not found)
+    data._daModeOk = (not found) and true or false
   else
-    -- default and "found"
-    show = found
+    data._daModeOk = found and true or false
   end
 
-  -- Combat state
   local inCombatFlag = (c.inCombat == true)
   local outCombatFlag = (c.outCombat == true)
   if not (inCombatFlag and outCombatFlag) then
@@ -5687,57 +5608,43 @@ local function CheckAuraConditions(data)
     end
   end
 
-  -- === Grouping mode (c.grouping) ===
   local grouping = c.grouping
-
   if grouping ~= nil and grouping ~= "any" then
     local groupOk = true
-
     if grouping == "nogroup" then
       groupOk = not InGroup()
-
     elseif grouping == "party" then
       groupOk = InPartyOnly()
-
     elseif grouping == "raid" then
       groupOk = InRaid()
-
     elseif grouping == "partyraid" then
       groupOk = InGroup()
-
     else
-      -- unknown value: safest is "fail closed"
       groupOk = false
     end
-
     if not groupOk then
       show = false
     end
   end
 
-  -- === Form / Stance requirement (if set)
-  if c.form and c.form ~= "All" then
+  if show and c.form and c.form ~= "All" then
     if not DoiteConditions_PassesFormRequirement(c.form) then
       show = false
     end
   end
 
-  -- === Weapon filter (Two-Hand / Shield / Dual-Wield) ===
   if show and c.weaponFilter and c.weaponFilter ~= "" then
     if not DoiteConditions_PassesWeaponFilter(c) then
       show = false
     end
   end
 
-  -- === Power threshold (% of max) — same semantics as abilities
   if show and c.powerEnabled
       and c.powerComp and c.powerComp ~= ""
       and c.powerVal and c.powerVal ~= "" then
-
     local valPct = GetPowerPercent()
     local targetPct = tonumber(c.powerVal) or 0
     local comp = c.powerComp
-
     local pass = true
     if comp == ">=" then
       pass = (valPct >= targetPct)
@@ -5751,7 +5658,6 @@ local function CheckAuraConditions(data)
     end
   end
 
-  -- === HP threshold (% of max) — respects target flags
   if show and c.hpComp and c.hpVal and c.hpMode and c.hpMode ~= "" then
     local hpTarget = nil
     if c.hpMode == "my" then
@@ -5760,9 +5666,7 @@ local function CheckAuraConditions(data)
       if UnitExists("target") then
         if allowSelf then
           hpTarget = "target"
-
         elseif allowHelp and allowHarm then
-          -- Both: any non-self target (friendly or hostile)
           if not UnitIsUnit("player", "target") then
             hpTarget = "target"
           end
@@ -5781,7 +5685,6 @@ local function CheckAuraConditions(data)
         end
       end
     end
-
     if hpTarget then
       local pct = _HPPercent(hpTarget)
       local thr = tonumber(c.hpVal)
@@ -5791,7 +5694,6 @@ local function CheckAuraConditions(data)
     end
   end
 
-  -- === Combo Points (Rogue/Druid only) ===
   if show and c.cpEnabled == true and _PlayerUsesComboPoints() then
     local cp = _GetComboPointsSafe()
     local thr = tonumber(c.cpVal)
@@ -5802,17 +5704,15 @@ local function CheckAuraConditions(data)
     end
   end
 
-  -- === Remaining-time condition ==========================================
+  -- Keep these with existing guards (editor semantics)
   if c.remainingEnabled
       and c.remainingComp and c.remainingComp ~= ""
       and c.remainingVal ~= nil and c.remainingVal ~= "" then
-
     if c.mode ~= "missing" and show then
       local targetSelf = true
       if not allowSelf and UnitExists("target") and (allowHelp or allowHarm) then
         local isFriend = UnitIsFriend("player", "target")
         local canAttack = UnitCanAttack("player", "target")
-
         if (allowHelp and allowHarm and not UnitIsUnit("player", "target")) or
             (allowHelp and isFriend and not UnitIsUnit("player", "target")) or
             (allowHarm and canAttack and not isFriend) then
@@ -5824,11 +5724,8 @@ local function CheckAuraConditions(data)
       if threshold then
         local comp = c.remainingComp
         local pass = true
-
         if targetSelf then
-          -- PLAYER/SELF remaining time must reflect the actual visible aura time (vanilla API)
           local rem = _PlayerAuraRemainingSeconds(name)
-
           if rem and rem > 0 then
             pass = _RemainingPasses(rem, comp, threshold)
           else
@@ -5843,11 +5740,9 @@ local function CheckAuraConditions(data)
               pass = rpass
             end
           else
-            -- No target-based remaining gating in all other cases
             pass = true
           end
         end
-
         if not pass then
           show = false
         end
@@ -5855,36 +5750,25 @@ local function CheckAuraConditions(data)
     end
   end
 
-
-  -- === Stacks (aura applications) ===
   if c.stacksEnabled
       and c.stacksComp and c.stacksComp ~= ""
       and c.stacksVal ~= nil and c.stacksVal ~= ""
       and c.mode ~= "missing"
       and show then
-
     local threshold = tonumber(c.stacksVal)
     if threshold then
       local unitToCheck = nil
-
-      -- Use the same target semantics as main aura gating
       if allowSelf then
-        -- Explicit or implied self: always read stacks from player
         unitToCheck = "player"
       elseif tf and tf.exists and (allowHelp or allowHarm) then
-        -- Use cached target facts (no extra UnitIsFriend/UnitCanAttack calls)
         local isFriend = tf.isFriend
         local canAttack = tf.canAttack
-
-        -- Help: friendly targets including self
         if allowHelp and isFriend then
           unitToCheck = "target"
-          -- Harm: hostile, non-friendly targets
         elseif allowHarm and canAttack and (not isFriend) then
           unitToCheck = "target"
         end
       end
-
       if unitToCheck then
         local cnt = _GetAuraStacksOnUnit(unitToCheck, name, wantDebuff)
         if cnt and (not _StacksPasses(cnt, c.stacksComp, threshold)) then
@@ -5894,17 +5778,12 @@ local function CheckAuraConditions(data)
     end
   end
 
-  -- === Target status / Distance / UnitType (auras) ======================
   if show and (c.targetDistance or c.targetUnitType or c.targetAlive or c.targetDead) then
-    -- For aura icons only apply these when looking at a real target (help/harm). Pure self-aura icons usually don't care about range.
     local unitForTargetMods = nil
-
     if tf and tf.exists and (allowHelp or allowHarm) then
       unitForTargetMods = "target"
     end
-
     if unitForTargetMods then
-      -- Alive / dead requirement (if configured)
       if not DoiteConditions_PassesTargetStatus(c, unitForTargetMods) then
         show = false
       elseif not DoiteConditions_PassesTargetDistance(c, unitForTargetMods, nil) then
@@ -5915,10 +5794,75 @@ local function CheckAuraConditions(data)
     end
   end
 
-  -- === Aura Conditions (extra aura-icon gating) =========================
   if show and c.auraConditions and table.getn(c.auraConditions) > 0 then
     if not DoiteConditions_EvaluateAuraConditionsList(c.auraConditions) then
       show = false
+    end
+  end
+
+  data._daSoundGate = (show == true) and true or false
+  if data._daModeOk == false then
+    show = false
+  end
+
+  do
+    local key = data.key
+    local st = key and _SoundStateByKey[key]
+  
+    local isTargetAura = ((allowHelp or allowHarm) and (not allowSelf)) and true or false
+  
+    local curTargetName = nil
+    if isTargetAura and tf and tf.exists then
+      curTargetName = UnitName("target")
+    end
+  
+    if isTargetAura then
+      if not st then
+        st = {}
+        _SoundStateByKey[key] = st
+      end
+  
+      local prevTargetName = st._daTargetName
+
+    -- If target identity changed, suppress sound edges this evaluation, and seed the edge states to the CURRENT values so we don't get a delayed false edge.
+      if prevTargetName ~= curTargetName then
+        st._daTargetName = curTargetName
+  
+        -- Seed both edge states to current truth (this is what _DoiteHandleEdgeSound would store)
+        st["auraFound"] = found and true or false
+        st["auraMissing"] = (not found) and true or false
+
+        -- Do NOT play sounds on target change.
+      else
+        -- Same target: normal edge sound behavior
+        _DoiteHandleEdgeSound(
+            key,
+            "auraFound",
+            found,
+            (data._daSoundGate and c.soundOnGainEnabled == true),
+            c.soundOnGain)
+        _DoiteHandleEdgeSound(
+            key,
+            "auraMissing",
+            (not found),
+            (data._daSoundGate and c.soundOnFadeEnabled == true),
+            c.soundOnFade)
+      end
+  
+    else
+      -- Self-based aura icons: normal behavior (player aura tracking is stable)
+      _DoiteHandleEdgeSound(
+          key,
+          "auraFound",
+          found,
+          (data._daSoundGate and c.soundOnGainEnabled == true),
+          c.soundOnGain)
+      _DoiteHandleEdgeSound(
+          key,
+          "auraMissing",
+          (not found),
+          (data._daSoundGate and c.soundOnFadeEnabled == true),
+          c.soundOnFade)
     end
   end
 
@@ -7347,7 +7291,7 @@ function DoiteConditions_OnUpdate(dt)
     local hasTE = false
 
     if te then
-      local now = _GetTime()
+      local now = GetTime()
       for _, slotC in pairs(te) do
         if slotC and slotC.endTime then
           local rem = slotC.endTime - now
