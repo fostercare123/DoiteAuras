@@ -12,6 +12,7 @@ _Please respect the license note._
 
 ## Features
 - Able to track an ability, buff, debuff and/or item
+- Match genereically by entering a name or uniquely via SpellID
 - Player buffs/debuffs visible beyond the visible cap (32)
 - Import/export functions to share UI profiles
 - Custom conditions (~50) to align when to show/hide icons
@@ -20,7 +21,7 @@ _Please respect the license note._
 - Custom icon glow visual effect, inspired by later clients
 - Custom animations for "soon off CD" (abilities)
 - Custom dynamic and static grouping system, collapsing towards a relative point or fixed point
-- Custom code block input, for unlimited freedom
+- Custom condition block input, for unlimited coding freedom
 - More to come.. _(bars, mouseover support, more features)_
 
 ## Tutorial & How-to instructions
@@ -50,7 +51,7 @@ This project is free and built with care in my spare time. Tips are 100% optiona
 [<img width="50" height="50" alt="Coffee" src="https://github.com/user-attachments/assets/183dbfd3-5b1b-4616-b110-09832d7bf153" />](https://buymeacoffee.com/doite)
 
 ## Contact
-Addon made by Doite, while all extensions of the 1.12/LUA 5.0 API by mentioned links at the top of this description. Contact me in-game, github via "Issues", or via Discord if something is wrong with __the addon__.
+Addon made by Doite & contributors, while all extensions of the 1.12/LUA 5.0 API by mentioned links at the top of this description. Contact me via github "Issues", or via Discord if something is wrong with __the addon__.
 You can check out my other addon here: [Tactica](https://github.com/Player-Doite/tactica) (_a raid helper for raid-leaders, including auto-building raids, auto-invite, posting tactics, assigning roles in raid roster and more_).
 
 ## Thanks to all fellow addon developers - a special thank you to:

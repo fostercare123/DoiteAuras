@@ -2463,12 +2463,22 @@ local function _GetBaseXY(key, dataTbl)
 end
 
 -- Player-only aura remaining (seconds); nil if not timed / not found.
-local function _PlayerAuraRemainingSeconds(auraName)
-  if not auraName then
-    return nil
+local function _PlayerAuraRemainingSeconds(auraName, auraSpellId, addedViaSpellId)
+  local useSpellIdOnly = (addedViaSpellId == true)
+  local playerAuraSlot = nil
+
+  if useSpellIdOnly then
+    local sid = tonumber(auraSpellId) or 0
+    if sid > 0 then
+      playerAuraSlot = DoitePlayerAuras.GetActiveAuraSlotBySpellId(sid)
+    end
+  else
+    if not auraName then
+      return nil
+    end
+    playerAuraSlot = DoitePlayerAuras.GetActiveAuraSlot(auraName)
   end
 
-  local playerAuraSlot = DoitePlayerAuras.GetActiveAuraSlot(auraName)
   if playerAuraSlot then
     local _, remainingMs, _ = GetPlayerAuraDuration(playerAuraSlot)
     if remainingMs and remainingMs > 0 then
@@ -2476,26 +2486,35 @@ local function _PlayerAuraRemainingSeconds(auraName)
     end
   end
 
-  -- get remaining for buff cap spells
-  local remaining = DoitePlayerAuras.GetHiddenBuffRemaining(auraName)
-  if remaining and remaining > 0 then
-    return remaining
+  if not useSpellIdOnly then
+    local remaining = DoitePlayerAuras.GetHiddenBuffRemaining(auraName)
+    if remaining and remaining > 0 then
+      return remaining
+    end
   end
 
   return nil
 end
 
-local function _DoiteTrackAuraOwnership(spellName, unit)
-  if not DoiteTrack or not spellName or not unit then
+local function _DoiteTrackAuraOwnership(spellKey, unit, useSpellId)
+  if not DoiteTrack or not spellKey or not unit then
     return nil, false, nil, false, false, false
   end
 
   -- Hard dependency on the consolidated helper
-  if not DoiteTrack.GetAuraOwnershipByName then
-    return nil, false, nil, false, false, false
-  end
+  local rem, recording, sid, isMine, isOther, ownerKnown
 
-  local rem, recording, sid, isMine, isOther, ownerKnown = DoiteTrack:GetAuraOwnershipByName(spellName, unit)
+  if useSpellId == true then
+    if not DoiteTrack.GetAuraOwnershipBySpellId then
+      return nil, false, nil, false, false, false
+    end
+    rem, recording, sid, isMine, isOther, ownerKnown = DoiteTrack:GetAuraOwnershipBySpellId(spellKey, unit)
+  else
+    if not DoiteTrack.GetAuraOwnershipByName then
+      return nil, false, nil, false, false, false
+    end
+    rem, recording, sid, isMine, isOther, ownerKnown = DoiteTrack:GetAuraOwnershipByName(spellKey, unit)
+  end
 
   -- Normalize booleans
   isMine = (isMine == true)
@@ -2518,20 +2537,25 @@ local function _DoiteTrackAuraOwnership(spellName, unit)
 end
 
 -- Unified remaining-time provider used by existing call sites (DoiteTrack only).
-local function _DoiteTrackAuraRemainingSeconds(spellName, unit)
-  if not DoiteTrack or not spellName or not unit then
+local function _DoiteTrackAuraRemainingSeconds(spellKey, unit, useSpellId)
+  if not DoiteTrack or not spellKey or not unit then
     return nil
   end
 
-  if DoiteTrack.GetAuraRemainingSecondsByName then
-    local rem = DoiteTrack:GetAuraRemainingSecondsByName(spellName, unit)
+  if useSpellId == true and DoiteTrack.GetAuraRemainingSecondsBySpellId then
+    local rem = DoiteTrack:GetAuraRemainingSecondsBySpellId(spellKey, unit)
+    if rem and rem > 0 then
+      return rem
+    end
+  elseif DoiteTrack.GetAuraRemainingSecondsByName then
+    local rem = DoiteTrack:GetAuraRemainingSecondsByName(spellKey, unit)
     if rem and rem > 0 then
       return rem
     end
   end
 
   if DoiteTrack.GetAuraRemainingOrRecordingByName then
-    local rem2 = DoiteTrack:GetAuraRemainingOrRecordingByName(spellName, unit)
+    local rem2 = DoiteTrack:GetAuraRemainingOrRecordingByName(spellKey, unit)
     if rem2 and rem2 > 0 then
       return rem2
     end
@@ -2542,18 +2566,20 @@ end
 
 
 -- Use DoiteTrack to evaluate a remaining-time comparison on a unit.
-local function _DoiteTrackRemainingPass(spellName, unit, comp, threshold)
-  if not DoiteTrack or not spellName or not unit or not comp or threshold == nil then
+local function _DoiteTrackRemainingPass(spellKey, unit, comp, threshold, useSpellId)
+  if not DoiteTrack or not spellKey or not unit or not comp or threshold == nil then
     return nil
   end
 
-  if DoiteTrack.RemainingPassesByName then
+  if useSpellId == true and DoiteTrack.RemainingPassesBySpellId then
+    return DoiteTrack:RemainingPassesBySpellId(spellKey, unit, comp, threshold)
+  elseif DoiteTrack.RemainingPassesByName then
     -- Add-on helper handles comparison internally
-    return DoiteTrack:RemainingPassesByName(spellName, unit, comp, threshold)
+    return DoiteTrack:RemainingPassesByName(spellKey, unit, comp, threshold)
   end
 
   -- Fallback within DoiteTrack: if no helper, compare using numeric remaining
-  local rem = _DoiteTrackAuraRemainingSeconds(spellName, unit)
+  local rem = _DoiteTrackAuraRemainingSeconds(spellKey, unit, useSpellId)
   if rem and rem > 0 then
     return _RemainingPasses(rem, comp, threshold)
   end
@@ -2610,6 +2636,39 @@ local function _TargetHasAura(auraName, wantDebuff)
     local b = snap.buffs
     return b and b[auraName] == true
   end
+end
+
+
+local function _TargetHasAuraBySpellId(spellId, wantDebuff)
+  spellId = tonumber(spellId) or 0
+  if spellId <= 0 then
+    return false
+  end
+
+  local snap = auraSnapshot["target"]
+  if not snap then
+    return false
+  end
+
+  if wantDebuff then
+    local d = snap.debuffIds
+    if d and d[spellId] then
+      return true
+    end
+
+    local count = snap.debuffCount or 0
+    if count >= 16 then
+      local b = snap.buffIds
+      if b and b[spellId] then
+        return true
+      end
+    end
+
+    return false
+  end
+
+  local b = snap.buffIds
+  return b and b[spellId] == true
 end
 
 -- Talent helpers for auraConditions (Known / Not known)
@@ -2809,23 +2868,37 @@ local function _AuraConditions_CheckEntry(entry)
   -- Has aura?
   ----------------------------------------------------------------
   local hasAura = false
+  local useSpellIdOnly = (entry.Addedviaspellid == true)
+  local auraSpellId = tonumber(entry.spellid) or 0
 
   if unit == "player" then
-    if (not wantDebuff) and DoitePlayerAuras.HasBuff(name) then
-      hasAura = true
-    elseif wantDebuff and DoitePlayerAuras.HasDebuff(name) then
-      hasAura = true
+    if useSpellIdOnly and auraSpellId > 0 then
+      if (not wantDebuff) and DoitePlayerAuras.HasBuffSpellId(auraSpellId) then
+        hasAura = true
+      elseif wantDebuff and DoitePlayerAuras.HasDebuffSpellId(auraSpellId) then
+        hasAura = true
+      end
+    else
+      if (not wantDebuff) and DoitePlayerAuras.HasBuff(name) then
+        hasAura = true
+      elseif wantDebuff and DoitePlayerAuras.HasDebuff(name) then
+        hasAura = true
+      end
     end
   else
     -- unit == "target"
-    hasAura = _TargetHasAura(name, wantDebuff)
+    if useSpellIdOnly and auraSpellId > 0 then
+      hasAura = _TargetHasAuraBySpellId(auraSpellId, wantDebuff)
+    else
+      hasAura = _TargetHasAura(name, wantDebuff)
+    end
   end
 
   ----------------------------------------------------------------
   -- If stacks enabled and aura exists, compute stacks and compare.
   ----------------------------------------------------------------
   if stacksEnabled and hasAura then
-    local cnt = _GetAuraStacksOnUnit(unit, name, wantDebuff)
+    local cnt = _GetAuraStacksOnUnit(unit, name, wantDebuff, auraSpellId, useSpellIdOnly)
     if cnt == nil then
       cnt = 1
     end
@@ -2901,13 +2974,25 @@ _StacksPasses = function(cnt, comp, target)
 end
 
 -- Get stack count for a named aura on target (or player). Uses DoitePlayerAuras for player checks.
-_GetAuraStacksOnUnit = function(unit, auraName, wantDebuff)
+_GetAuraStacksOnUnit = function(unit, auraName, wantDebuff, auraSpellId, addedViaSpellId)
   if not unit or not auraName then
     return nil
   end
 
   -- Use DoitePlayerAuras for player checks
   if unit == "player" then
+    if addedViaSpellId == true then
+      local sid = tonumber(auraSpellId) or 0
+      if sid <= 0 then
+        return nil
+      end
+      if wantDebuff then
+        return DoitePlayerAuras.GetDebuffStacksBySpellId(sid)
+      else
+        return DoitePlayerAuras.GetBuffStacksBySpellId(sid)
+      end
+    end
+
     if wantDebuff then
       return DoitePlayerAuras.GetDebuffStacks(auraName)
     else
@@ -2938,7 +3023,11 @@ _GetAuraStacksOnUnit = function(unit, auraName, wantDebuff)
       name = _NP_SpellNameAndTexture(auraId)
     end
 
-    if name == auraName then
+    if addedViaSpellId == true then
+      if auraId and auraSpellId and tonumber(auraId) == tonumber(auraSpellId) then
+        return applications or 1
+      end
+    elseif name == auraName then
       return applications or 1
     end
 
@@ -5466,7 +5555,15 @@ local function CheckAuraConditions(data)
   end
 
   local name = data.displayName or data.name
-  if not name then
+  local useSpellIdOnly = (data.Addedviaspellid == true)
+  local auraSpellId = tonumber(data.spellid) or 0
+
+  if useSpellIdOnly and auraSpellId <= 0 then
+    data._daSoundGate = false
+    return false, false, false
+  end
+
+  if (not useSpellIdOnly) and (not name) then
     data._daSoundGate = false
     return false, false, false
   end
@@ -5530,11 +5627,20 @@ local function CheckAuraConditions(data)
 
   if show and allowSelf then
     local hit = false
-    if wantBuff then
-      hit = DoitePlayerAuras.HasBuff(name)
-    end
-    if (not hit) and wantDebuff then
-      hit = DoitePlayerAuras.HasDebuff(name)
+    if useSpellIdOnly and auraSpellId > 0 then
+      if wantBuff then
+        hit = DoitePlayerAuras.HasBuffSpellId(auraSpellId)
+      end
+      if (not hit) and wantDebuff then
+        hit = DoitePlayerAuras.HasDebuffSpellId(auraSpellId)
+      end
+    else
+      if wantBuff then
+        hit = DoitePlayerAuras.HasBuff(name)
+      end
+      if (not hit) and wantDebuff then
+        hit = DoitePlayerAuras.HasDebuff(name)
+      end
     end
     if hit then
       found = true
@@ -5545,10 +5651,18 @@ local function CheckAuraConditions(data)
     local s = auraSnapshot.target
     if s then
       local hit = false
-      if wantBuff and s.buffs[name] then
-        hit = true
-      elseif wantDebuff and _TargetHasOverflowDebuff(name) then
-        hit = true
+      if useSpellIdOnly and auraSpellId > 0 then
+        if wantBuff and s.buffIds and s.buffIds[auraSpellId] then
+          hit = true
+        elseif wantDebuff and _TargetHasAuraBySpellId(auraSpellId, true) then
+          hit = true
+        end
+      else
+        if wantBuff and s.buffs[name] then
+          hit = true
+        elseif wantDebuff and _TargetHasOverflowDebuff(name) then
+          hit = true
+        end
       end
       if hit then
         found = true
@@ -5560,10 +5674,18 @@ local function CheckAuraConditions(data)
     local s = auraSnapshot.target
     if s then
       local hit = false
-      if wantBuff and s.buffs[name] then
-        hit = true
-      elseif wantDebuff and _TargetHasOverflowDebuff(name) then
-        hit = true
+      if useSpellIdOnly and auraSpellId > 0 then
+        if wantBuff and s.buffIds and s.buffIds[auraSpellId] then
+          hit = true
+        elseif wantDebuff and _TargetHasAuraBySpellId(auraSpellId, true) then
+          hit = true
+        end
+      else
+        if wantBuff and s.buffs[name] then
+          hit = true
+        elseif wantDebuff and _TargetHasOverflowDebuff(name) then
+          hit = true
+        end
       end
       if hit then
         found = true
@@ -5579,7 +5701,7 @@ local function CheckAuraConditions(data)
       ownerUnit = "target"
     end
     if ownerUnit then
-      local _, _, _, isMine, isOther, mineKnown = _DoiteTrackAuraOwnership(name, ownerUnit)
+      local _, _, _, isMine, isOther, mineKnown = _DoiteTrackAuraOwnership(useSpellIdOnly and auraSpellId or name, ownerUnit, useSpellIdOnly)
       if mineKnown then
         if ownerFilter == "mine" and not isMine then
           found = false
@@ -5725,7 +5847,7 @@ local function CheckAuraConditions(data)
         local comp = c.remainingComp
         local pass = true
         if targetSelf then
-          local rem = _PlayerAuraRemainingSeconds(name)
+          local rem = _PlayerAuraRemainingSeconds(name, auraSpellId, useSpellIdOnly)
           if rem and rem > 0 then
             pass = _RemainingPasses(rem, comp, threshold)
           else
@@ -5733,7 +5855,7 @@ local function CheckAuraConditions(data)
           end
         else
           if ownerFilter == "mine" and DoiteTrack then
-            local rpass = _DoiteTrackRemainingPass(name, "target", comp, threshold)
+            local rpass = _DoiteTrackRemainingPass(useSpellIdOnly and auraSpellId or name, "target", comp, threshold, useSpellIdOnly)
             if rpass == nil then
               pass = false
             else
@@ -5770,7 +5892,7 @@ local function CheckAuraConditions(data)
         end
       end
       if unitToCheck then
-        local cnt = _GetAuraStacksOnUnit(unitToCheck, name, wantDebuff)
+        local cnt = _GetAuraStacksOnUnit(unitToCheck, name, wantDebuff, auraSpellId, useSpellIdOnly)
         if cnt and (not _StacksPasses(cnt, c.stacksComp, threshold)) then
           show = false
         end
@@ -6150,6 +6272,8 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
 
       if ca.textTimeRemaining == true then
         local auraName = dataTbl.displayName or dataTbl.name
+      local useSpellIdOnly = (dataTbl.Addedviaspellid == true)
+      local auraSpellId = tonumber(dataTbl.spellid) or 0
 
         local allowHelp = (ca.targetHelp == true)
         local allowHarm = (ca.targetHarm == true)
@@ -6177,10 +6301,10 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
 
         if targetSelf then
           -- PLAYER/SELF remaining-time text must reflect the actual visible aura time (vanilla/tooltip scan), never DoiteTrack. Ownership filtering (onlyMine/onlyOthers) belongs in the condition logic.
-          remAura = _PlayerAuraRemainingSeconds(auraName)
+          remAura = _PlayerAuraRemainingSeconds(auraName, auraSpellId, useSpellIdOnly)
         else
           -- Target remaining time relies on DoiteTrack (vanilla target auras don't expose durations).
-          remAura = _DoiteTrackAuraRemainingSeconds(auraName, "target")
+          remAura = _DoiteTrackAuraRemainingSeconds(useSpellIdOnly and auraSpellId or auraName, "target", useSpellIdOnly)
         end
 
         if remAura and remAura > 0 then
@@ -6221,6 +6345,8 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
     local ca = dataTbl.conditions.aura
     if ca.textStackCounter == true then
       local auraName = dataTbl.displayName or dataTbl.name
+      local useSpellIdOnly = (dataTbl.Addedviaspellid == true)
+      local auraSpellId = tonumber(dataTbl.spellid) or 0
       local wantDebuff = (dataTbl.type == "Debuff")
 
       -- Resolve which unit to read stacks from (same semantics as CheckAuraConditions)
@@ -6251,7 +6377,7 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
       end
 
       if unitToCheck then
-        local cnt = _GetAuraStacksOnUnit(unitToCheck, auraName, wantDebuff)
+        local cnt = _GetAuraStacksOnUnit(unitToCheck, auraName, wantDebuff, auraSpellId, useSpellIdOnly)
         if cnt and cnt >= 1 then
           local s = _DA_NumToStr(cnt)
           if s ~= frame._daLastStacksText then
