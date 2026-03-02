@@ -17,6 +17,8 @@ local DoitePlayerAuras = {
 
   activeBuffs = {}, -- spell name -> slot
   activeDebuffs = {}, -- spell name -> slot
+  activeBuffSpellIds = {}, -- spellId -> slot
+  activeDebuffSpellIds = {}, -- spellId -> slot
 
   cappedBuffsExpirationTime = {}, -- spell name -> expiration time in seconds
   cappedBuffsStacks = {}, -- spell name -> stacks
@@ -48,6 +50,12 @@ end
 _G["DoitePlayerAuras"] = DoitePlayerAuras
 
 local function MarkActive(spellId, activeTable, slot)
+  if activeTable == DoitePlayerAuras.activeBuffs then
+    DoitePlayerAuras.activeBuffSpellIds[spellId] = slot
+  elseif activeTable == DoitePlayerAuras.activeDebuffs then
+    DoitePlayerAuras.activeDebuffSpellIds[spellId] = slot
+  end
+
   -- cache spell name if not already cached
   if not DoitePlayerAuras.spellIdToNameCache[spellId] then
     local spellName = GetSpellRecField(spellId, "name")
@@ -66,6 +74,12 @@ local function MarkActive(spellId, activeTable, slot)
 end
 
 local function MarkInactive(spellId, activeTable)
+  if activeTable == DoitePlayerAuras.activeBuffs then
+    DoitePlayerAuras.activeBuffSpellIds[spellId] = false
+  elseif activeTable == DoitePlayerAuras.activeDebuffs then
+    DoitePlayerAuras.activeDebuffSpellIds[spellId] = false
+  end
+
   local spellName = DoitePlayerAuras.spellIdToNameCache[spellId]
   if spellName then
     activeTable[spellName] = false
@@ -86,6 +100,8 @@ local function UpdateAuras()
   -- clear active buffs/debuffs
   DoitePlayerAuras.activeBuffs = {}
   DoitePlayerAuras.activeDebuffs = {}
+  DoitePlayerAuras.activeBuffSpellIds = {}
+  DoitePlayerAuras.activeDebuffSpellIds = {}
 
   -- aura array becomes 1-indexed in Lua: 1-32 are buffs, 33-48 are debuffs
   DoitePlayerAuras.numActiveBuffs = 0
@@ -142,9 +158,25 @@ function DoitePlayerAuras.HasBuff(spellName)
       DoitePlayerAuras.IsHiddenByBuffCap(spellName)
 end
 
+function DoitePlayerAuras.HasBuffSpellId(spellId)
+  spellId = tonumber(spellId) or 0
+  if spellId <= 0 then
+    return false
+  end
+  return DoitePlayerAuras.activeBuffSpellIds[spellId] or false
+end
+
 function DoitePlayerAuras.HasDebuff(spellName)
   -- don't think it's possible to hit debuff cap as a player currently, not gonna worry about it
   return DoitePlayerAuras.activeDebuffs[spellName] or false
+end
+
+function DoitePlayerAuras.HasDebuffSpellId(spellId)
+  spellId = tonumber(spellId) or 0
+  if spellId <= 0 then
+    return false
+  end
+  return DoitePlayerAuras.activeDebuffSpellIds[spellId] or false
 end
 
 function DoitePlayerAuras.GetActiveAuraSlot(spellName)
@@ -154,6 +186,25 @@ function DoitePlayerAuras.GetActiveAuraSlot(spellName)
   end
 
   local debuffSlot = DoitePlayerAuras.activeDebuffs[spellName]
+  if debuffSlot then
+    return MAX_BUFF_SLOTS + debuffSlot - 1 -- 32-47
+  end
+
+  return nil
+end
+
+function DoitePlayerAuras.GetActiveAuraSlotBySpellId(spellId)
+  spellId = tonumber(spellId) or 0
+  if spellId <= 0 then
+    return nil
+  end
+
+  local buffSlot = DoitePlayerAuras.activeBuffSpellIds[spellId]
+  if buffSlot then
+    return buffSlot - 1 -- 0-31
+  end
+
+  local debuffSlot = DoitePlayerAuras.activeDebuffSpellIds[spellId]
   if debuffSlot then
     return MAX_BUFF_SLOTS + debuffSlot - 1 -- 32-47
   end
@@ -197,6 +248,29 @@ function DoitePlayerAuras.GetBuffStacks(spellName)
   return nil
 end
 
+function DoitePlayerAuras.GetBuffStacksBySpellId(spellId)
+  local cachedSlot = DoitePlayerAuras.HasBuffSpellId(spellId)
+  if not cachedSlot then
+    return nil
+  end
+
+  if DoitePlayerAuras.buffs[cachedSlot] and DoitePlayerAuras.buffs[cachedSlot].spellId == spellId then
+    return DoitePlayerAuras.buffs[cachedSlot].stacks
+  end
+
+  for i = 1, MAX_BUFF_SLOTS do
+    if not DoitePlayerAuras.buffs[i].spellId then
+      break
+    end
+
+    if DoitePlayerAuras.buffs[i].spellId == spellId then
+      return DoitePlayerAuras.buffs[i].stacks
+    end
+  end
+
+  return nil
+end
+
 function DoitePlayerAuras.GetDebuffStacks(spellName)
   -- check if active and get cached slot
   local cachedSlot = DoitePlayerAuras.activeDebuffs[spellName]
@@ -215,6 +289,29 @@ function DoitePlayerAuras.GetDebuffStacks(spellName)
   end
 
   -- fallback: search through debuffs for matching spell ID
+  for i = 1, MAX_DEBUFF_SLOTS do
+    if not DoitePlayerAuras.debuffs[i].spellId then
+      break
+    end
+
+    if DoitePlayerAuras.debuffs[i].spellId == spellId then
+      return DoitePlayerAuras.debuffs[i].stacks
+    end
+  end
+
+  return nil
+end
+
+function DoitePlayerAuras.GetDebuffStacksBySpellId(spellId)
+  local cachedSlot = DoitePlayerAuras.HasDebuffSpellId(spellId)
+  if not cachedSlot then
+    return nil
+  end
+
+  if DoitePlayerAuras.debuffs[cachedSlot] and DoitePlayerAuras.debuffs[cachedSlot].spellId == spellId then
+    return DoitePlayerAuras.debuffs[cachedSlot].stacks
+  end
+
   for i = 1, MAX_DEBUFF_SLOTS do
     if not DoitePlayerAuras.debuffs[i].spellId then
       break

@@ -287,8 +287,13 @@ local function _AddTrackedFromEntry(_, data)
     sid = nil
   end
 
+  local addedViaSpellId = (data.Addedviaspellid == true)
   local name = data.displayName or data.name or ""
   local norm = _NormSpellName(name)
+
+  if addedViaSpellId then
+    norm = nil
+  end
 
   if not sid and not norm then
     return
@@ -313,7 +318,10 @@ local function _AddTrackedFromEntry(_, data)
       trackHarm = false,
       onlyMine = false,
       onlyOthers = false,
+      addedViaSpellId = addedViaSpellId,
     }
+  elseif addedViaSpellId then
+    entry.addedViaSpellId = true
   end
 
   if sid then
@@ -1926,32 +1934,40 @@ function DoiteTrack:_OnAuraNPEvent()
 
   -- Resolve tracked entry (spellId first, then name)
   local entry = TrackedBySpellId[spellId]
-  if (not entry) and spellNameNorm then
-    local byN = TrackedByNameNorm[spellNameNorm]
-    if byN and byN.onlyMine == true then
-      entry = byN
-      entry.spellIds = entry.spellIds or {}
-      if not entry.spellIds[spellId] then
-        entry.spellIds[spellId] = true
-      end
-      TrackedBySpellId[spellId] = entry
+  local byN = nil
+  if spellNameNorm then
+    byN = TrackedByNameNorm[spellNameNorm]
+  end
 
-      -- Keep Flame Shock rank list cache in sync when player discover a new rank by name.
-      if _IsPlayerShaman and spellNameNorm == "flame shock" and entry.kind == "Debuff" then
-        if type(_FlameShockSpellIdsList) ~= "table" then
-          _FlameShockSpellIdsList = {}
+  -- Always seed name-tracked onlyMine entries with discovered spellId, even when a strict
+  -- Addedviaspellid entry already occupies TrackedBySpellId[spellId].
+  -- This keeps ownership/remaining logic correct for name-tracked icons in mixed setups.
+  if byN and byN.onlyMine == true then
+    byN.spellIds = byN.spellIds or {}
+    if not byN.spellIds[spellId] then
+      byN.spellIds[spellId] = true
+    end
+
+    if not entry then
+      entry = byN
+      TrackedBySpellId[spellId] = entry
+    end
+
+    -- Keep Flame Shock rank list cache in sync when player discover a new rank by name.
+    if _IsPlayerShaman and spellNameNorm == "flame shock" and byN.kind == "Debuff" then
+      if type(_FlameShockSpellIdsList) ~= "table" then
+        _FlameShockSpellIdsList = {}
+      end
+      local i = 1
+      while _FlameShockSpellIdsList[i] do
+        if _FlameShockSpellIdsList[i] == spellId then
+          i = nil
+          break
         end
-        local i = 1
-        while _FlameShockSpellIdsList[i] do
-          if _FlameShockSpellIdsList[i] == spellId then
-            i = nil
-            break
-          end
-          i = i + 1
-        end
-        if i then
-          _FlameShockSpellIdsList[i] = spellId
-        end
+        i = i + 1
+      end
+      if i then
+        _FlameShockSpellIdsList[i] = spellId
       end
     end
   end
@@ -2116,6 +2132,32 @@ function DoiteTrack:_OnAuraNPEvent()
             t[targetGuid] = nil
             return
           end
+        end
+      end
+    end
+
+    -- If cast target is our current target and aura presence is immediately verifiable,
+    -- arm now as well. This handles "take over" refreshes that may not fire *_ADDED_*.
+    do
+      local tg = _GetUnitGuidSafe("target")
+      local isDeb = (entry.kind == "Debuff")
+      if tg and tg == targetGuid and _AuraHasSpellId("target", spellId, isDeb) then
+        local bucket = _GetAuraBucketForGuid(targetGuid, true)
+        if bucket then
+          local a = bucket[spellId]
+          if not a then
+            a = {}
+            bucket[spellId] = a
+          end
+
+          a.appliedAt = now
+          a.fullDur = secRounded
+          a.cp = cp or 0
+          a.isDebuff = isDeb
+          a.lastSeen = now
+
+          t[targetGuid] = nil
+          return
         end
       end
     end
@@ -2377,6 +2419,57 @@ local function _GetEntryForName(spellName)
   return TrackedByNameNorm[norm]
 end
 
+local function _AuraHasNormName(unit, wantNormName, isDebuff)
+  if not unit or not wantNormName then
+    return false
+  end
+
+  local auras = _GetUnitAuraTable(unit, isDebuff)
+  if type(auras) ~= "table" then
+    return false
+  end
+
+  local n = table.getn(auras)
+  if not n or n <= 0 then
+    return false
+  end
+
+  local i
+  for i = 1, n do
+    local sid = tonumber(auras[i]) or 0
+    if sid > 0 then
+      local n0 = _GetSpellNameRank(sid)
+      local nn = _NormSpellName(n0)
+      if nn and nn == wantNormName then
+        return true
+      end
+    end
+  end
+
+  -- Debuff-overflow safety: when debuff table is full-ish, also inspect buffs.
+  if isDebuff and n >= 16 then
+    local buffs = _GetUnitAuraTable(unit, false)
+    if type(buffs) == "table" then
+      local n2 = table.getn(buffs)
+      if n2 and n2 > 0 then
+        local j
+        for j = 1, n2 do
+          local sid2 = tonumber(buffs[j]) or 0
+          if sid2 > 0 then
+            local n1 = _GetSpellNameRank(sid2)
+            local nn2 = _NormSpellName(n1)
+            if nn2 and nn2 == wantNormName then
+              return true
+            end
+          end
+        end
+      end
+    end
+  end
+
+  return false
+end
+
 function DoiteTrack:GetAuraRemainingSecondsByName(spellName, unit)
   if not spellName or not unit then
     return nil
@@ -2423,12 +2516,69 @@ function DoiteTrack:GetAuraRemainingSecondsByName(spellName, unit)
   return bestRem, bestSpellId
 end
 
+function DoiteTrack:GetAuraRemainingSecondsBySpellId(spellId, unit)
+  spellId = tonumber(spellId) or 0
+  if spellId <= 0 or not unit then
+    return nil
+  end
+
+  local entry = TrackedBySpellId[spellId]
+  if not entry then
+    return nil
+  end
+
+  if not _UnitExistsFlag(unit) then
+    return nil
+  end
+
+  local guid = _GetUnitGuidSafe(unit)
+  if not guid then
+    return nil
+  end
+
+  local isDebuff = (entry.kind == "Debuff")
+  if not _AuraHasSpellId(unit, spellId, isDebuff) then
+    _ClearAuraStateForGuidSpell(guid, spellId)
+    return nil
+  end
+
+  local now = GetTime and GetTime() or 0
+  local rem = _GetRemainingFromState(guid, spellId, now)
+  if rem and rem > 0 then
+    return rem, spellId
+  end
+
+  return nil
+end
+
 function DoiteTrack:RemainingPassesByName(spellName, unit, comp, threshold)
   if not spellName or not unit or not comp or threshold == nil then
     return nil
   end
 
   local rem = self:GetAuraRemainingSecondsByName(spellName, unit)
+  if not rem or rem <= 0 then
+    return nil
+  end
+
+  if comp == ">=" then
+    return rem >= threshold
+  elseif comp == "<=" then
+    return rem <= threshold
+  elseif comp == "==" then
+    return rem == threshold
+  end
+  return nil
+end
+
+
+function DoiteTrack:RemainingPassesBySpellId(spellId, unit, comp, threshold)
+  spellId = tonumber(spellId) or 0
+  if spellId <= 0 or not unit or not comp or threshold == nil then
+    return nil
+  end
+
+  local rem = self:GetAuraRemainingSecondsBySpellId(spellId, unit)
   if not rem or rem <= 0 then
     return nil
   end
@@ -2488,8 +2638,52 @@ function DoiteTrack:GetAuraOwnershipByName(spellName, unit)
     end
   end
 
+  if (not hasMine) and (not hasOther) then
+    local wantNorm = entry.normName
+    if wantNorm and _AuraHasNormName(unit, wantNorm, isDebuff) then
+      -- Conservative ownership fallback: if aura is present by name but we have no
+      -- player-confirmed timer, treat as "other" until proven mine.
+      hasOther = true
+    end
+  end
+
   local ownerKnown = (hasMine or hasOther)
   return bestRem, false, bestSpellId, hasMine, hasOther, ownerKnown
+end
+
+function DoiteTrack:GetAuraOwnershipBySpellId(spellId, unit)
+  spellId = tonumber(spellId) or 0
+  if spellId <= 0 or not unit then
+    return nil, false, nil, false, false, false
+  end
+
+  local entry = TrackedBySpellId[spellId]
+  if not entry then
+    return nil, false, nil, false, false, false
+  end
+
+  if not _UnitExistsFlag(unit) then
+    return nil, false, nil, false, false, false
+  end
+
+  local guid = _GetUnitGuidSafe(unit)
+  if not guid then
+    return nil, false, nil, false, false, false
+  end
+
+  local isDebuff = (entry.kind == "Debuff")
+  if not _AuraHasSpellId(unit, spellId, isDebuff) then
+    _ClearAuraStateForGuidSpell(guid, spellId)
+    return nil, false, nil, false, false, false
+  end
+
+  local now = GetTime and GetTime() or 0
+  local rem = _GetRemainingFromState(guid, spellId, now)
+  if rem and rem > 0 then
+    return rem, false, spellId, true, false, true
+  end
+
+  return nil, false, spellId, false, true, true
 end
 
 ---------------------------------------------------------------
