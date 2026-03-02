@@ -189,8 +189,7 @@ local function _NormSpellName(name)
 end
 
 ---------------------------------------------------------------
--- Scan DoiteAuras config for which buffs/debuffs should be tracked
--- player ONLY care about entries where onlyMine == true.
+-- Scan DoiteAuras config for which buffs/debuffs should be tracked player ONLY care about entries where onlyMine == true.
 ---------------------------------------------------------------
 local function _LooksLikeSpellConfigTable(tbl)
   if type(tbl) ~= "table" then
@@ -499,6 +498,8 @@ local function _AuraHasSpellId(unit, spellId, isDebuff)
   return false
 end
 
+local _GetSpellNameRank
+
 local function _CollectAuraSpellIdsMatchingName(unit, isDebuff, normName, out)
   if not unit or not normName or normName == "" then
     return out
@@ -542,7 +543,7 @@ end
 ---------------------------------------------------------------
 -- Spell name/rank helper (kept compatible)
 ---------------------------------------------------------------
-local function _GetSpellNameRank(spellId)
+_GetSpellNameRank = function(spellId)
   spellId = tonumber(spellId) or 0
 
   local nameCache = _G["DoiteTrack_SpellNameCache"]
@@ -1979,8 +1980,7 @@ function DoiteTrack:_OnAuraNPEvent()
     byN = TrackedByNameNorm[spellNameNorm]
   end
 
-  -- Always seed name-tracked onlyMine entries with discovered spellId, even when a strict
-  -- Addedviaspellid entry already occupies TrackedBySpellId[spellId].
+  -- Always seed name-tracked onlyMine entries with discovered spellId, even when a strict Addedviaspellid entry already occupies TrackedBySpellId[spellId].
   -- This keeps ownership/remaining logic correct for name-tracked icons in mixed setups.
   if byN and byN.onlyMine == true then
     byN.spellIds = byN.spellIds or {}
