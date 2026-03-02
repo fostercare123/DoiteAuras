@@ -287,8 +287,13 @@ local function _AddTrackedFromEntry(_, data)
     sid = nil
   end
 
+  local addedViaSpellId = (data.Addedviaspellid == true)
   local name = data.displayName or data.name or ""
   local norm = _NormSpellName(name)
+
+  if addedViaSpellId then
+    norm = nil
+  end
 
   if not sid and not norm then
     return
@@ -313,7 +318,10 @@ local function _AddTrackedFromEntry(_, data)
       trackHarm = false,
       onlyMine = false,
       onlyOthers = false,
+      addedViaSpellId = addedViaSpellId,
     }
+  elseif addedViaSpellId then
+    entry.addedViaSpellId = true
   end
 
   if sid then
@@ -2423,6 +2431,41 @@ function DoiteTrack:GetAuraRemainingSecondsByName(spellName, unit)
   return bestRem, bestSpellId
 end
 
+function DoiteTrack:GetAuraRemainingSecondsBySpellId(spellId, unit)
+  spellId = tonumber(spellId) or 0
+  if spellId <= 0 or not unit then
+    return nil
+  end
+
+  local entry = TrackedBySpellId[spellId]
+  if not entry then
+    return nil
+  end
+
+  if not _UnitExistsFlag(unit) then
+    return nil
+  end
+
+  local guid = _GetUnitGuidSafe(unit)
+  if not guid then
+    return nil
+  end
+
+  local isDebuff = (entry.kind == "Debuff")
+  if not _AuraHasSpellId(unit, spellId, isDebuff) then
+    _ClearAuraStateForGuidSpell(guid, spellId)
+    return nil
+  end
+
+  local now = GetTime and GetTime() or 0
+  local rem = _GetRemainingFromState(guid, spellId, now)
+  if rem and rem > 0 then
+    return rem, spellId
+  end
+
+  return nil
+end
+
 function DoiteTrack:RemainingPassesByName(spellName, unit, comp, threshold)
   if not spellName or not unit or not comp or threshold == nil then
     return nil
@@ -2490,6 +2533,41 @@ function DoiteTrack:GetAuraOwnershipByName(spellName, unit)
 
   local ownerKnown = (hasMine or hasOther)
   return bestRem, false, bestSpellId, hasMine, hasOther, ownerKnown
+end
+
+function DoiteTrack:GetAuraOwnershipBySpellId(spellId, unit)
+  spellId = tonumber(spellId) or 0
+  if spellId <= 0 or not unit then
+    return nil, false, nil, false, false, false
+  end
+
+  local entry = TrackedBySpellId[spellId]
+  if not entry then
+    return nil, false, nil, false, false, false
+  end
+
+  if not _UnitExistsFlag(unit) then
+    return nil, false, nil, false, false, false
+  end
+
+  local guid = _GetUnitGuidSafe(unit)
+  if not guid then
+    return nil, false, nil, false, false, false
+  end
+
+  local isDebuff = (entry.kind == "Debuff")
+  if not _AuraHasSpellId(unit, spellId, isDebuff) then
+    _ClearAuraStateForGuidSpell(guid, spellId)
+    return nil, false, nil, false, false, false
+  end
+
+  local now = GetTime and GetTime() or 0
+  local rem = _GetRemainingFromState(guid, spellId, now)
+  if rem and rem > 0 then
+    return rem, false, spellId, true, false, true
+  end
+
+  return nil, false, spellId, false, true, true
 end
 
 ---------------------------------------------------------------
