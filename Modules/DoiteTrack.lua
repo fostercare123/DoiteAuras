@@ -499,6 +499,46 @@ local function _AuraHasSpellId(unit, spellId, isDebuff)
   return false
 end
 
+local function _CollectAuraSpellIdsMatchingName(unit, isDebuff, normName, out)
+  if not unit or not normName or normName == "" then
+    return out
+  end
+
+  local auras = _GetUnitAuraTable(unit, isDebuff)
+  if type(auras) ~= "table" then
+    return out
+  end
+
+  out = out or {}
+
+  local function maybeAddSid(rawSid)
+    local sid = tonumber(rawSid) or 0
+    if sid <= 0 or out[sid] then
+      return
+    end
+
+    local n = _GetSpellNameRank(sid)
+    if _NormSpellName(n) == normName then
+      out[sid] = true
+    end
+  end
+
+  local k
+  for k in pairs(auras) do
+    maybeAddSid(k)
+  end
+
+  local n = table.getn(auras)
+  if n and n > 0 then
+    local i
+    for i = 1, n do
+      maybeAddSid(auras[i])
+    end
+  end
+
+  return out
+end
+
 ---------------------------------------------------------------
 -- Spell name/rank helper (kept compatible)
 ---------------------------------------------------------------
@@ -2558,6 +2598,35 @@ function DoiteTrack:GetAuraOwnershipByName(spellName, unit)
       end
     else
       _ClearAuraStateForGuidSpell(guid, sid)
+    end
+  end
+
+  -- Name-tracked entries can be queried before we've discovered rank spellIds.
+  -- On that first pass, learn any spellIds currently present on the unit that
+  -- normalize to this aura name, then immediately evaluate ownership from them.
+  if (not hasMine) and (not hasOther) and entry.normName then
+    local discovered = _CollectAuraSpellIdsMatchingName(unit, isDebuff, entry.normName)
+    if discovered then
+      for sid in pairs(discovered) do
+        if not entry.spellIds[sid] then
+          entry.spellIds[sid] = true
+        end
+
+        if _AuraHasSpellId(unit, sid, isDebuff) then
+          local rem = _GetRemainingFromState(guid, sid, now)
+          if rem and rem > 0 then
+            hasMine = true
+            if (not bestRem) or rem > bestRem then
+              bestRem = rem
+              bestSpellId = sid
+            end
+          else
+            hasOther = true
+          end
+        else
+          _ClearAuraStateForGuidSpell(guid, sid)
+        end
+      end
     end
   end
 
