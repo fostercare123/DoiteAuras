@@ -1934,32 +1934,40 @@ function DoiteTrack:_OnAuraNPEvent()
 
   -- Resolve tracked entry (spellId first, then name)
   local entry = TrackedBySpellId[spellId]
-  if (not entry) and spellNameNorm then
-    local byN = TrackedByNameNorm[spellNameNorm]
-    if byN and byN.onlyMine == true then
-      entry = byN
-      entry.spellIds = entry.spellIds or {}
-      if not entry.spellIds[spellId] then
-        entry.spellIds[spellId] = true
-      end
-      TrackedBySpellId[spellId] = entry
+  local byN = nil
+  if spellNameNorm then
+    byN = TrackedByNameNorm[spellNameNorm]
+  end
 
-      -- Keep Flame Shock rank list cache in sync when player discover a new rank by name.
-      if _IsPlayerShaman and spellNameNorm == "flame shock" and entry.kind == "Debuff" then
-        if type(_FlameShockSpellIdsList) ~= "table" then
-          _FlameShockSpellIdsList = {}
+  -- Always seed name-tracked onlyMine entries with discovered spellId, even when a strict
+  -- Addedviaspellid entry already occupies TrackedBySpellId[spellId].
+  -- This keeps ownership/remaining logic correct for name-tracked icons in mixed setups.
+  if byN and byN.onlyMine == true then
+    byN.spellIds = byN.spellIds or {}
+    if not byN.spellIds[spellId] then
+      byN.spellIds[spellId] = true
+    end
+
+    if not entry then
+      entry = byN
+      TrackedBySpellId[spellId] = entry
+    end
+
+    -- Keep Flame Shock rank list cache in sync when player discover a new rank by name.
+    if _IsPlayerShaman and spellNameNorm == "flame shock" and byN.kind == "Debuff" then
+      if type(_FlameShockSpellIdsList) ~= "table" then
+        _FlameShockSpellIdsList = {}
+      end
+      local i = 1
+      while _FlameShockSpellIdsList[i] do
+        if _FlameShockSpellIdsList[i] == spellId then
+          i = nil
+          break
         end
-        local i = 1
-        while _FlameShockSpellIdsList[i] do
-          if _FlameShockSpellIdsList[i] == spellId then
-            i = nil
-            break
-          end
-          i = i + 1
-        end
-        if i then
-          _FlameShockSpellIdsList[i] = spellId
-        end
+        i = i + 1
+      end
+      if i then
+        _FlameShockSpellIdsList[i] = spellId
       end
     end
   end
