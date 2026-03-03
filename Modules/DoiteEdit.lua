@@ -2184,7 +2184,7 @@ local function CreateConditionsUI()
   condFrame.cond_aura_text_time_override = CreateFrame("EditBox", "DoiteCond_Aura_TextTimeOverride", _Parent(), "InputBoxTemplate")
   condFrame.cond_aura_text_time_override:SetWidth(100)
   condFrame.cond_aura_text_time_override:SetHeight(18)
-  condFrame.cond_aura_text_time_override:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 150, row11_y - 13)
+  condFrame.cond_aura_text_time_override:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 165, row11_y - 11)
   condFrame.cond_aura_text_time_override:SetAutoFocus(false)
   condFrame.cond_aura_text_time_override:SetJustifyH("LEFT")
   condFrame.cond_aura_text_time_override:SetFontObject("GameFontNormalSmall")
@@ -2193,17 +2193,17 @@ local function CreateConditionsUI()
   condFrame.cond_aura_text_stack_override = CreateFrame("EditBox", "DoiteCond_Aura_TextStackOverride", _Parent(), "InputBoxTemplate")
   condFrame.cond_aura_text_stack_override:SetWidth(100)
   condFrame.cond_aura_text_stack_override:SetHeight(18)
-  condFrame.cond_aura_text_stack_override:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 150, row12_y+1)
+  condFrame.cond_aura_text_stack_override:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 165, row12_y+3)
   condFrame.cond_aura_text_stack_override:SetAutoFocus(false)
   condFrame.cond_aura_text_stack_override:SetJustifyH("LEFT")
   condFrame.cond_aura_text_stack_override:SetFontObject("GameFontNormalSmall")
   condFrame.cond_aura_text_stack_override:Hide()
 
   condFrame.cond_aura_text_override_note = _Parent():CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  condFrame.cond_aura_text_override_note:SetPoint("TOPLEFT", condFrame.cond_aura_text_stack_override, "BOTTOMLEFT", 0, -2)
+  condFrame.cond_aura_text_override_note:SetPoint("TOPLEFT", condFrame.cond_aura_text_stack_override, "BOTTOMLEFT", -70, -2)
   condFrame.cond_aura_text_override_note:SetTextColor(1, 0.82, 0)
-  condFrame.cond_aura_text_override_note:SetText("Input separate aura Name or SpellID to override (on player based). Empty, falls back to default.")
-  condFrame.cond_aura_text_override_note:SetWidth(120)
+  condFrame.cond_aura_text_override_note:SetText("Input override aura Name or SpellID (on player based). Empty, equals default.")
+  condFrame.cond_aura_text_override_note:SetWidth(220)
   condFrame.cond_aura_text_override_note:SetJustifyH("LEFT")
   condFrame.cond_aura_text_override_note:Hide()
   SetSeparator("aura", 10, "TIME REMAINING & STACKS", true, true)
@@ -2444,11 +2444,19 @@ local function CreateConditionsUI()
   condFrame.cond_item_text_time_override = CreateFrame("EditBox", "DoiteCond_Item_TextTimeOverride", _Parent(), "InputBoxTemplate")
   condFrame.cond_item_text_time_override:SetWidth(100)
   condFrame.cond_item_text_time_override:SetHeight(18)
-  condFrame.cond_item_text_time_override:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 150, row12_y - 27)
+  condFrame.cond_item_text_time_override:SetPoint("TOPLEFT", _Parent(), "TOPLEFT", 165, row12_y - 25)
   condFrame.cond_item_text_time_override:SetAutoFocus(false)
   condFrame.cond_item_text_time_override:SetJustifyH("LEFT")
   condFrame.cond_item_text_time_override:SetFontObject("GameFontNormalSmall")
   condFrame.cond_item_text_time_override:Hide()
+
+  condFrame.cond_item_text_override_note = _Parent():CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  condFrame.cond_item_text_override_note:SetPoint("TOPLEFT", condFrame.cond_item_text_time_override, "BOTTOMLEFT", -70, -2)
+  condFrame.cond_item_text_override_note:SetTextColor(1, 0.82, 0)
+  condFrame.cond_item_text_override_note:SetText("Input override aura Name or SpellID (on player based). Empty, equals default.")
+  condFrame.cond_item_text_override_note:SetWidth(220)
+  condFrame.cond_item_text_override_note:SetJustifyH("LEFT")
+  condFrame.cond_item_text_override_note:Hide()
   SetSeparator("item", 12, "REMAINING TIME", true, true)
 
   -- CLASS-SPECIFIC (Combo points)
@@ -4596,22 +4604,22 @@ function UpdateItemStacksForMissing()
   end
 
   if condFrame.cond_aura_text_time_override then
-    condFrame.cond_aura_text_time_override:SetScript("OnEnterPressed", function(self)
+    condFrame.cond_aura_text_time_override:SetScript("OnEnterPressed", function()
       _SaveAuraTextOverride("rem")
-      self:ClearFocus()
+      this:ClearFocus()
     end)
-    condFrame.cond_aura_text_time_override:SetScript("OnEscapePressed", function(self)
-      self:ClearFocus()
+    condFrame.cond_aura_text_time_override:SetScript("OnEscapePressed", function()
+      this:ClearFocus()
       UpdateCondFrameForKey(currentKey)
     end)
   end
   if condFrame.cond_aura_text_stack_override then
-    condFrame.cond_aura_text_stack_override:SetScript("OnEnterPressed", function(self)
+    condFrame.cond_aura_text_stack_override:SetScript("OnEnterPressed", function()
       _SaveAuraTextOverride("stack")
-      self:ClearFocus()
+      this:ClearFocus()
     end)
-    condFrame.cond_aura_text_stack_override:SetScript("OnEscapePressed", function(self)
-      self:ClearFocus()
+    condFrame.cond_aura_text_stack_override:SetScript("OnEscapePressed", function()
+      this:ClearFocus()
       UpdateCondFrameForKey(currentKey)
     end)
   end
@@ -4637,12 +4645,12 @@ function UpdateItemStacksForMissing()
   end
 
   if condFrame.cond_item_text_time_override then
-    condFrame.cond_item_text_time_override:SetScript("OnEnterPressed", function(self)
+    condFrame.cond_item_text_time_override:SetScript("OnEnterPressed", function()
       _SaveItemTextOverride()
-      self:ClearFocus()
+      this:ClearFocus()
     end)
-    condFrame.cond_item_text_time_override:SetScript("OnEscapePressed", function(self)
-      self:ClearFocus()
+    condFrame.cond_item_text_time_override:SetScript("OnEscapePressed", function()
+      this:ClearFocus()
       UpdateCondFrameForKey(currentKey)
     end)
   end
@@ -8912,6 +8920,9 @@ local function UpdateConditionsUI(data)
     if condFrame.cond_item_text_time_override then
       condFrame.cond_item_text_time_override:Hide()
     end
+    if condFrame.cond_item_text_override_note then
+      condFrame.cond_item_text_override_note:Hide()
+    end
     if condFrame.cond_item_enchant then
       condFrame.cond_item_enchant:Hide()
     end
@@ -9471,6 +9482,16 @@ local ic = c.item or {}
       condFrame.cond_item_target_dead:Show()
     end
 
+    if condFrame.cond_aura_text_time_override then
+      condFrame.cond_aura_text_time_override:Hide()
+    end
+    if condFrame.cond_aura_text_stack_override then
+      condFrame.cond_aura_text_stack_override:Hide()
+    end
+    if condFrame.cond_aura_text_override_note then
+      condFrame.cond_aura_text_override_note:Hide()
+    end
+
     -- VISUAL EFFECTS
     condFrame.cond_item_glow:Show()
     condFrame.cond_item_greyscale:Show()
@@ -9512,6 +9533,13 @@ local ic = c.item or {}
           condFrame.cond_item_text_time_override:SetText(ic.remOverride or "")
         else
           condFrame.cond_item_text_time_override:Hide()
+        end
+      end
+      if condFrame.cond_item_text_override_note then
+        if allowTime and condFrame.cond_item_text_time:GetChecked() then
+          condFrame.cond_item_text_override_note:Show()
+        else
+          condFrame.cond_item_text_override_note:Hide()
         end
       end
     end
@@ -10068,6 +10096,7 @@ local ic = c.item or {}
     _Hide(condFrame.cond_item_greyscale)
     _Hide(condFrame.cond_item_text_time)
     _Hide(condFrame.cond_item_text_time_override)
+    _Hide(condFrame.cond_item_text_override_note)
     _Hide(condFrame.cond_item_enchant)
     _Hide(condFrame.cond_item_text_enchant)
     _Hide(condFrame.cond_item_stacks_cb)
@@ -10529,6 +10558,13 @@ local ic = c.item or {}
     else
       condFrame.cond_aura_text_time:Hide()
       condFrame.cond_aura_text_stack:Hide()
+    end
+
+    if condFrame.cond_item_text_time_override then
+      condFrame.cond_item_text_time_override:Hide()
+    end
+    if condFrame.cond_item_text_override_note then
+      condFrame.cond_item_text_override_note:Hide()
     end
 
     do
