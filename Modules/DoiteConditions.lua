@@ -74,19 +74,19 @@ local function _NP_SpellNameAndTexture(spellId)
   end
 
   local name = nil
-  if GetSpellNameAndRankForId then
-    local n = GetSpellNameAndRankForId(spellId)
-    if type(n) == "string" and n ~= "" then
+  if type(GetSpellNameAndRankForId) == "function" then
+    local okName, n = pcall(GetSpellNameAndRankForId, spellId)
+    if okName and type(n) == "string" and n ~= "" then
       name = n
     end
   end
 
   local tex = nil
-  if GetSpellRecField and GetSpellIconTexture then
-    local iconId = GetSpellRecField(spellId, "spellIconID")
-    if iconId and iconId > 0 then
-      local t = GetSpellIconTexture(iconId)
-      if type(t) == "string" and t ~= "" then
+  if type(GetSpellRecField) == "function" and type(GetSpellIconTexture) == "function" then
+    local okIconId, iconId = pcall(GetSpellRecField, spellId, "spellIconID")
+    if okIconId and iconId and iconId > 0 then
+      local okTex, t = pcall(GetSpellIconTexture, iconId)
+      if okTex and type(t) == "string" and t ~= "" then
         tex = t
       end
     end
@@ -2494,6 +2494,29 @@ local function _PlayerAuraRemainingSeconds(auraName, auraSpellId, addedViaSpellI
   end
 
   return nil
+end
+
+local function _ResolvePlayerAuraTextOverride(overrideValue, fallbackName, fallbackSpellId, fallbackUseSpellId)
+  local v = overrideValue
+  if type(v) == "string" then
+    v = str_gsub(v, "^%s*(.-)%s*$", "%1")
+    if v == "" then
+      v = nil
+    end
+  else
+    v = nil
+  end
+
+  if not v then
+    return fallbackName, fallbackSpellId, fallbackUseSpellId
+  end
+
+  local sid = tonumber(v)
+  if sid and sid > 0 then
+    return fallbackName, sid, true
+  end
+
+  return v, 0, false
 end
 
 local function _DoiteTrackAuraOwnership(spellKey, unit, useSpellId)
@@ -6242,6 +6265,17 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
       local ci = dataTbl.conditions.item
 
       if ci.textTimeRemaining == true then
+        local ovName, ovSpellId, ovUseSpellId = _ResolvePlayerAuraTextOverride(ci.remOverride, nil, 0, false)
+        if ci.remOverride and (ovName or (ovUseSpellId and ovSpellId and ovSpellId > 0)) then
+          local remOverride = _PlayerAuraRemainingSeconds(ovName, ovSpellId, ovUseSpellId)
+          if remOverride and remOverride > 0 then
+            remText = _FmtRem(remOverride)
+            wantRem = (remText ~= nil)
+            frame._daSortRem = remOverride
+          end
+        end
+
+        if not wantRem then
         -- Reuse this later for stack counter too
         itemState = _EvaluateItemCoreState(dataTbl, ci)
 
@@ -6268,6 +6302,7 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
             frame._daSortRem = remItem
           end
         end
+        end
       end
 
       ----------------------------------------------------------------
@@ -6281,8 +6316,9 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
 
       if ca.textTimeRemaining == true then
         local auraName = dataTbl.displayName or dataTbl.name
-      local useSpellIdOnly = (dataTbl.Addedviaspellid == true)
-      local auraSpellId = tonumber(dataTbl.spellid) or 0
+        local useSpellIdOnly = (dataTbl.Addedviaspellid == true)
+        local auraSpellId = tonumber(dataTbl.spellid) or 0
+        auraName, auraSpellId, useSpellIdOnly = _ResolvePlayerAuraTextOverride(ca.remOverride, auraName, auraSpellId, useSpellIdOnly)
 
         local allowHelp = (ca.targetHelp == true)
         local allowHarm = (ca.targetHarm == true)
@@ -6357,6 +6393,7 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
       local useSpellIdOnly = (dataTbl.Addedviaspellid == true)
       local auraSpellId = tonumber(dataTbl.spellid) or 0
       local wantDebuff = (dataTbl.type == "Debuff")
+      auraName, auraSpellId, useSpellIdOnly = _ResolvePlayerAuraTextOverride(ca.stackOverride, auraName, auraSpellId, useSpellIdOnly)
 
       -- Resolve which unit to read stacks from (same semantics as CheckAuraConditions)
       local unitToCheck = nil
@@ -6386,6 +6423,7 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
       end
 
       if unitToCheck then
+        unitToCheck = "player"
         local cnt = _GetAuraStacksOnUnit(unitToCheck, auraName, wantDebuff, auraSpellId, useSpellIdOnly)
         if cnt and cnt >= 1 then
           local s = _DA_NumToStr(cnt)
