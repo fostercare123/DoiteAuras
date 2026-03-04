@@ -246,6 +246,25 @@ local function DoiteAuras_RebuildSpellTextureCache()
     end
 end
 
+local function DA_GetSpellTextureById(spellId)
+    local sid = tonumber(spellId)
+    if not sid or sid <= 0 then
+        return nil
+    end
+
+    if type(GetSpellRecField) == "function" and type(GetSpellIconTexture) == "function" then
+        local okIconId, iconId = pcall(GetSpellRecField, sid, "spellIconID")
+        if okIconId and iconId and iconId > 0 then
+            local okTex, tex = pcall(GetSpellIconTexture, iconId)
+            if okTex and type(tex) == "string" and tex ~= "" then
+                return tex
+            end
+        end
+    end
+
+    return nil
+end
+
 -- Event hook: rebuild on login/world and whenever the spellbook changes (talent/build swaps)
 local _daSpellTex = CreateFrame("Frame", "DoiteSpellTex")
 _daSpellTex:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -3346,14 +3365,13 @@ addBtn:SetScript("OnClick", function()
       entry.Addedviaspellid = true
   end
 
-  -- Auto-prime texture: SpellID-added Buff/Debuff: try Nampower icon lookup immediately. If it returns nil, do NOTHING here so the existing fallback logic below (cache/siblings) and DoiteConditions "seen" updates remain unchanged.
+  -- Auto-prime texture: SpellID-added Buff/Debuff: try Nampower spell texture lookup immediately.
+  -- If it returns nil, do NOTHING here so existing fallback logic below (cache/siblings) and DoiteConditions "seen" updates remain unchanged.
   if spellIdStr then
-      if type(GetItemIconTexture) == "function" then
-          local ok, tex = pcall(GetItemIconTexture, tonumber(spellIdStr))
-          if ok and tex and tex ~= "" then
-              cache[name]       = tex
-              entry.iconTexture = tex
-          end
+      local tex = DA_GetSpellTextureById(spellIdStr)
+      if tex then
+          cache[name]       = tex
+          entry.iconTexture = tex
       end
   end
 

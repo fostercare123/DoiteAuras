@@ -74,19 +74,19 @@ local function _NP_SpellNameAndTexture(spellId)
   end
 
   local name = nil
-  if GetSpellNameAndRankForId then
-    local n = GetSpellNameAndRankForId(spellId)
-    if type(n) == "string" and n ~= "" then
+  if type(GetSpellNameAndRankForId) == "function" then
+    local okName, n = pcall(GetSpellNameAndRankForId, spellId)
+    if okName and type(n) == "string" and n ~= "" then
       name = n
     end
   end
 
   local tex = nil
-  if GetSpellRecField and GetSpellIconTexture then
-    local iconId = GetSpellRecField(spellId, "spellIconID")
-    if iconId and iconId > 0 then
-      local t = GetSpellIconTexture(iconId)
-      if type(t) == "string" and t ~= "" then
+  if type(GetSpellRecField) == "function" and type(GetSpellIconTexture) == "function" then
+    local okIconId, iconId = pcall(GetSpellRecField, spellId, "spellIconID")
+    if okIconId and iconId and iconId > 0 then
+      local okTex, t = pcall(GetSpellIconTexture, iconId)
+      if okTex and type(t) == "string" and t ~= "" then
         tex = t
       end
     end
