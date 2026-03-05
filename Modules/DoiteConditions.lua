@@ -6423,7 +6423,6 @@ local function _Doite_UpdateOverlayForFrame(frame, key, dataTbl, slideActive)
       end
 
       if unitToCheck then
-        unitToCheck = "player"
         local cnt = _GetAuraStacksOnUnit(unitToCheck, auraName, wantDebuff, auraSpellId, useSpellIdOnly)
         if cnt and cnt >= 1 then
           local s = _DA_NumToStr(cnt)

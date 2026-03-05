@@ -40,7 +40,7 @@ local VfxCond_RefreshFromDB
 local VfxCond_ResetEditing
 
 local SOUND_FILES = {
-  "Arrow_Swoosh.ogg", "BITE.ogg", "ESPARK1.ogg", "Fireball.ogg", "Gasp.ogg",
+  "Arrow_Swoosh.ogg", "Trend - Uwu.ogg", "BITE.ogg", "ESPARK1.ogg", "Fireball.ogg", "Gasp.ogg",
   "Hit1.ogg", "Hit2.ogg", "Hit3.ogg", "Hit4.ogg", "Hit5.ogg", "Hit6.ogg", "Hit7.ogg", "Hit8.ogg",
   "PUNCH.ogg", "Squeakypig.ogg", "aggro.ogg", "bam.ogg", "bear_polar.ogg", "bigkiss.ogg", "burp4.ogg",
   "cat2.ogg", "chant2.ogg", "chant4.ogg", "chimes.ogg", "cookie.ogg", "heartbeat.ogg", "hic3.ogg",
