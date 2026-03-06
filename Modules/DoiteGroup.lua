@@ -769,6 +769,7 @@ end
 
 -- Public API: request a group reflow (preferred over directly setting the global flag)
 function DoiteGroup.RequestReflow()
+  if DoiteGroup.CleanupDanglingGroupData then pcall(DoiteGroup.CleanupDanglingGroupData) end
   _G["DoiteGroup_NeedReflow"] = true
   if DoiteGroup._reflowQueued then
     return
@@ -922,7 +923,12 @@ local function _BuildNames(kind)
   end
 
   for _, d in pairs(db.spells) do
-    local n = (kind == "group") and d.group or d.category
+    local n = nil
+    if kind == "group" then
+      n = d.group
+    else
+      n = d.category
+    end
     if n and n ~= "" and not seen[n] then
       seen[n] = true
       table.insert(out, n)
@@ -983,6 +989,42 @@ local function _CleanupGroupIfEmpty(name)
   if db.groupFixed then db.groupFixed[name] = nil end
   if db.bucketCollapsed then db.bucketCollapsed[name] = nil end
   if db.bucketDisabled then db.bucketDisabled[name] = nil end
+end
+
+function DoiteGroup.CleanupDanglingGroupData()
+  local db = _DA_DB()
+  local usedGroups = {}
+  local usedCategories = {}
+
+  for _, d in pairs(db.spells) do
+    if d.group and d.group ~= "" then usedGroups[d.group] = true end
+    if d.category and d.category ~= "" then usedCategories[d.category] = true end
+  end
+
+  local i = 1
+  while i <= table.getn(db.categories) do
+    local c = db.categories[i]
+    if c and c ~= "" and not usedCategories[c] then
+      table.remove(db.categories, i)
+    else
+      i = i + 1
+    end
+  end
+
+  local function pruneMap(t)
+    if not t then return end
+    for k in pairs(t) do
+      if not usedGroups[k] then t[k] = nil end
+    end
+  end
+  pruneMap(db.groupSort)
+  pruneMap(db.groupFixed)
+  pruneMap(db.bucketCollapsed)
+  pruneMap(db.bucketDisabled)
+
+  for g in pairs(usedGroups) do
+    _EnsureUniqueLeader(g)
+  end
 end
 
 function DoiteGroup._DG_UI_GetData(ctx)
@@ -1182,15 +1224,21 @@ function DoiteGroup._DG_UI_Refresh(ctx)
     return
   end
 
-  state.mode = nil
+  local detectedMode = nil
   if d.group and d.group ~= "" then
-    state.mode = "group"
+    detectedMode = "group"
     state.step = (state.step == "settings") and "settings" or "ingroup"
   elseif d.category and d.category ~= "" then
-    state.mode = "category"
+    detectedMode = "category"
     state.step = "incategory"
   elseif state.step ~= "newkind" and state.step ~= "newname" and state.step ~= "existing" then
     state.step = "pick"
+  end
+
+  if detectedMode then
+    state.mode = detectedMode
+  elseif state.step == "pick" then
+    state.mode = nil
   end
 
   if state.step == "pick" then
@@ -1267,13 +1315,34 @@ function DoiteGroup._DG_UI_WireHandlers(ctx)
   end)
   w.bRename:SetScript("OnClick", function()
     local d = DoiteGroup._DG_UI_GetData(ctx)
+    if not d then return end
+    if d.group and d.group ~= "" then
+      ctx.state.mode = "group"
+      ctx.state.renameFrom = d.group
+    elseif d.category and d.category ~= "" then
+      ctx.state.mode = "category"
+      ctx.state.renameFrom = d.category
+    else
+      return
+    end
     ctx.state.rename = true
-    ctx.state.renameFrom = (ctx.state.mode == "group") and d.group or d.category
     w.nameIn:SetText(ctx.state.renameFrom or "")
     ctx.state.step = "newname"
     DoiteGroup._DG_UI_Refresh(ctx)
   end)
-  w.bLeave:SetScript("OnClick", function() ctx.state.step = "confirmleave"; DoiteGroup._DG_UI_Refresh(ctx) end)
+  w.bLeave:SetScript("OnClick", function()
+    local d = DoiteGroup._DG_UI_GetData(ctx)
+    if not d then return end
+    if d.group and d.group ~= "" then
+      ctx.state.mode = "group"
+    elseif d.category and d.category ~= "" then
+      ctx.state.mode = "category"
+    else
+      return
+    end
+    ctx.state.step = "confirmleave"
+    DoiteGroup._DG_UI_Refresh(ctx)
+  end)
   w.bYes:SetScript("OnClick", function() DoiteGroup._DG_UI_LeaveCurrent(ctx); DoiteGroup._DG_UI_Refresh(ctx) end)
   w.bBackC:SetScript("OnClick", function() ctx.state.step = (ctx.state.mode == "group") and "ingroup" or "incategory"; DoiteGroup._DG_UI_Refresh(ctx) end)
   w.bBackD:SetScript("OnClick", function() ctx.state.step = "pick"; DoiteGroup._DG_UI_Refresh(ctx) end)
@@ -1281,21 +1350,22 @@ function DoiteGroup._DG_UI_WireHandlers(ctx)
   w.bBackSettings:SetScript("OnClick", function() ctx.state.step = "ingroup"; DoiteGroup._DG_UI_Refresh(ctx) end)
 
   w.leaderCB:SetScript("OnClick", function(self)
+    local cb = self or this or w.leaderCB
     local d = DoiteGroup._DG_UI_GetData(ctx)
-    if not d or not d.group then self:SetChecked(false); return end
-    if self:GetChecked() then
+    if not d or not d.group then cb:SetChecked(false); return end
+    if cb:GetChecked() then
       for k, s in pairs(_DA_DB().spells) do
         if s.group == d.group and k ~= ctx.state.key then
           s.isLeader = false
         end
       end
       d.isLeader = true
-      self:SetChecked(true)
-      self:Disable()
+      cb:SetChecked(true)
+      cb:Disable()
       w.bSettings:Enable()
       DoiteGroup._DG_UI_RefreshAll(ctx)
     else
-      self:SetChecked(d.isLeader and true or false)
+      cb:SetChecked(d.isLeader and true or false)
     end
   end)
 
@@ -1320,6 +1390,8 @@ function DoiteGroup.AttachEditGroupUI(frame, api)
     w = {}
   }
   local w = ctx.w
+
+  if frame.groupLabel then frame.groupLabel:Hide() end
 
   w.line = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   w.line:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -68)
