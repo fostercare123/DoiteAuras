@@ -1125,6 +1125,7 @@ end
 
 function DoiteGroup._DG_UI_InitExistingDD(ctx)
   local w = ctx.w
+  if UIDropDownMenu_Initialize then
   UIDropDownMenu_Initialize(w.groupDD, function()
     local arr = _BuildNames("group")
     local i = 1
@@ -1138,8 +1139,10 @@ function DoiteGroup._DG_UI_InitExistingDD(ctx)
       i = i + 1
     end
   end)
-  UIDropDownMenu_SetText("Group", w.groupDD)
+  end
+  if UIDropDownMenu_SetText then UIDropDownMenu_SetText("Group", w.groupDD) end
 
+  if UIDropDownMenu_Initialize then
   UIDropDownMenu_Initialize(w.catDD, function()
     local arr = _BuildNames("category")
     local i = 1
@@ -1153,7 +1156,8 @@ function DoiteGroup._DG_UI_InitExistingDD(ctx)
       i = i + 1
     end
   end)
-  UIDropDownMenu_SetText("Category", w.catDD)
+  end
+  if UIDropDownMenu_SetText then UIDropDownMenu_SetText("Category", w.catDD) end
 end
 
 function DoiteGroup._DG_UI_Refresh(ctx)
@@ -1215,11 +1219,11 @@ function DoiteGroup._DG_UI_Refresh(ctx)
 
     if w.growthDD and ctx.frame.InitGrowthDropdown then
       ctx.frame.InitGrowthDropdown(w.growthDD, d)
-      UIDropDownMenu_SetText(d.growth or "Horizontal Right", w.growthDD)
+      if UIDropDownMenu_SetText then UIDropDownMenu_SetText(d.growth or "Horizontal Right", w.growthDD) end
     end
     if w.numDD and ctx.frame.InitNumAurasDropdown then
       ctx.frame.InitNumAurasDropdown(w.numDD, d)
-      UIDropDownMenu_SetText(tostring(d.numAuras or 5), w.numDD)
+      if UIDropDownMenu_SetText then UIDropDownMenu_SetText(tostring(d.numAuras or 5), w.numDD) end
     end
 
     local settings = (DoiteAurasDB and DoiteAurasDB.settings)
@@ -1348,12 +1352,12 @@ function DoiteGroup.AttachEditGroupUI(frame, api)
   w.bBackC = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   w.bBackC:SetWidth(70); w.bBackC:SetHeight(20); w.bBackC:SetPoint("LEFT", w.bYes, "RIGHT", 6, 0); w.bBackC:SetText("Back")
 
-  w.groupDD = CreateFrame("Frame", nil, frame, "UIDropDownMenuTemplate")
+  w.groupDD = CreateFrame("Frame", "DoiteConditions_GroupPickDD", frame, "UIDropDownMenuTemplate")
   w.groupDD:SetPoint("TOPLEFT", w.line, "BOTTOMLEFT", -16, -4)
-  UIDropDownMenu_SetWidth(120, w.groupDD)
-  w.catDD = CreateFrame("Frame", nil, frame, "UIDropDownMenuTemplate")
+  if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(120, w.groupDD) end
+  w.catDD = CreateFrame("Frame", "DoiteConditions_CategoryPickDD", frame, "UIDropDownMenuTemplate")
   w.catDD:SetPoint("LEFT", w.groupDD, "RIGHT", 6, 0)
-  UIDropDownMenu_SetWidth(120, w.catDD)
+  if UIDropDownMenu_SetWidth then UIDropDownMenu_SetWidth(120, w.catDD) end
   w.bBackD = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   w.bBackD:SetWidth(60); w.bBackD:SetHeight(20); w.bBackD:SetPoint("LEFT", w.catDD, "RIGHT", -4, 2); w.bBackD:SetText("Back")
 
@@ -1400,4 +1404,7 @@ function DoiteGroup.AttachEditGroupUI(frame, api)
     if not d.group or d.group == "" then return true end
     return d.isLeader == true
   end
+
+  ctx.state.key = editingKey()
+  DoiteGroup._DG_UI_Refresh(ctx)
 end

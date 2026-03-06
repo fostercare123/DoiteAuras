@@ -8261,7 +8261,7 @@ local function UpdateConditionsUI(data)
   -- ABILITY
   if data.type == "Ability" then
     -- show rows
-    ShowSeparatorsForType("ability")
+    if ShowSeparatorsForType then ShowSeparatorsForType("ability") end
     -- ensure aura-only tip is hidden when not editing an aura
     if condFrame.cond_aura_tip then
       condFrame.cond_aura_tip:Hide()
@@ -8933,7 +8933,7 @@ local function UpdateConditionsUI(data)
 
     -- ITEM
   elseif data.type == "Item" then
-    ShowSeparatorsForType("item")
+    if ShowSeparatorsForType then ShowSeparatorsForType("item") end
     -- ensure aura-only tip is hidden when not editing an aura
     if condFrame.cond_aura_tip then
       condFrame.cond_aura_tip:Hide()
@@ -10018,7 +10018,7 @@ local ic = c.item or {}
 
     -- AURA (Buff/Debuff)
   else
-    ShowSeparatorsForType("aura")
+    if ShowSeparatorsForType then ShowSeparatorsForType("aura") end
 
     if AuraCond_RefreshFromDB then
       AuraCond_RefreshFromDB("aura")
