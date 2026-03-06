@@ -888,3 +888,371 @@ _watch:RegisterEvent("ADDON_LOADED")
 _watch:SetScript("OnEvent", function()
   _HookApplyVisualsIfPresent()
 end)
+
+---------------------------------------------------------------
+-- Edit UI helpers for dynamic Group/Category management
+---------------------------------------------------------------
+local function _DA_DB()
+  DoiteAurasDB = DoiteAurasDB or {}
+  DoiteAurasDB.spells = DoiteAurasDB.spells or {}
+  DoiteAurasDB.categories = DoiteAurasDB.categories or {}
+  return DoiteAurasDB
+end
+
+local function _TrimName(v)
+  if not v then return "" end
+  return (string.gsub(v, "^%s*(.-)%s*$", "%1"))
+end
+
+local function _BuildNames(kind)
+  local db = _DA_DB()
+  local out = {}
+  local seen = {}
+
+  if kind == "category" then
+    local i = 1
+    while i <= table.getn(db.categories) do
+      local c = db.categories[i]
+      if c and c ~= "" and not seen[c] then
+        seen[c] = true
+        table.insert(out, c)
+      end
+      i = i + 1
+    end
+  end
+
+  for _, d in pairs(db.spells) do
+    local n = (kind == "group") and d.group or d.category
+    if n and n ~= "" and not seen[n] then
+      seen[n] = true
+      table.insert(out, n)
+    end
+  end
+
+  table.sort(out, function(a, b)
+    return string.upper(a) < string.upper(b)
+  end)
+  return out
+end
+
+local function _EnsureUniqueLeader(groupName)
+  if not groupName or groupName == "" then return end
+  local db = _DA_DB()
+  local leaderKey = nil
+  for k, d in pairs(db.spells) do
+    if d.group == groupName and d.isLeader then
+      leaderKey = k
+      break
+    end
+  end
+  if leaderKey then return end
+  for _, d in pairs(db.spells) do
+    if d.group == groupName then
+      d.isLeader = true
+      return
+    end
+  end
+end
+
+local function _CleanupCategoryIfEmpty(name)
+  local db = _DA_DB()
+  if not name or name == "" then return end
+  for _, d in pairs(db.spells) do
+    if d.category == name then return end
+  end
+  local i = 1
+  while i <= table.getn(db.categories) do
+    if db.categories[i] == name then
+      table.remove(db.categories, i)
+    else
+      i = i + 1
+    end
+  end
+end
+
+local function _CleanupGroupIfEmpty(name)
+  local db = _DA_DB()
+  if not name or name == "" then return end
+  for _, d in pairs(db.spells) do
+    if d.group == name then
+      _EnsureUniqueLeader(name)
+      return
+    end
+  end
+  if db.groupSort then db.groupSort[name] = nil end
+  if db.groupFixed then db.groupFixed[name] = nil end
+  if db.bucketCollapsed then db.bucketCollapsed[name] = nil end
+  if db.bucketDisabled then db.bucketDisabled[name] = nil end
+end
+
+function DoiteGroup.AttachEditGroupUI(frame, api)
+  if not frame or frame._dgEditorBuilt then return end
+  frame._dgEditorBuilt = true
+
+  local state = { step = "pick", mode = nil, rename = false, key = nil }
+  local function Ensure() return api and api.Ensure and api.Ensure(state.key) end
+  local function RefreshAll()
+    if api and api.SafeRefresh then api.SafeRefresh() end
+    if api and api.SafeEvaluate then api.SafeEvaluate() end
+    if api and api.ListRefresh then pcall(api.ListRefresh) end
+  end
+
+  local line = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  line:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -68)
+  line:SetWidth(318)
+  line:SetJustifyH("LEFT")
+  frame.dgLine = line
+
+  local bNew = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bNew:SetWidth(70); bNew:SetHeight(20); bNew:SetPoint("TOPLEFT", line, "BOTTOMLEFT", 0, -6); bNew:SetText("New")
+  local bExisting = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bExisting:SetWidth(70); bExisting:SetHeight(20); bExisting:SetPoint("LEFT", bNew, "RIGHT", 6, 0); bExisting:SetText("Existing")
+
+  local bGroup = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bGroup:SetWidth(70); bGroup:SetHeight(20); bGroup:SetPoint("TOPLEFT", line, "BOTTOMLEFT", 0, -6); bGroup:SetText("Group")
+  local bCat = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bCat:SetWidth(70); bCat:SetHeight(20); bCat:SetPoint("LEFT", bGroup, "RIGHT", 6, 0); bCat:SetText("Category")
+  local bBackA = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bBackA:SetWidth(70); bBackA:SetHeight(20); bBackA:SetPoint("LEFT", bCat, "RIGHT", 6, 0); bBackA:SetText("Back")
+
+  local nameLbl = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  nameLbl:SetPoint("TOPLEFT", line, "BOTTOMLEFT", 0, -10)
+  local nameIn = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+  nameIn:SetWidth(120); nameIn:SetHeight(18); nameIn:SetAutoFocus(false); nameIn:SetPoint("LEFT", nameLbl, "RIGHT", 8, 0)
+  local bAdd = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bAdd:SetWidth(60); bAdd:SetHeight(20); bAdd:SetPoint("LEFT", nameIn, "RIGHT", 6, 0); bAdd:SetText("Add")
+  local bBackB = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bBackB:SetWidth(60); bBackB:SetHeight(20); bBackB:SetPoint("LEFT", bAdd, "RIGHT", 6, 0); bBackB:SetText("Back")
+
+  local bRename = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bRename:SetWidth(70); bRename:SetHeight(20); bRename:SetPoint("TOPLEFT", line, "BOTTOMLEFT", 0, -6); bRename:SetText("Rename")
+  local bLeave = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bLeave:SetWidth(70); bLeave:SetHeight(20); bLeave:SetPoint("LEFT", bRename, "RIGHT", 6, 0); bLeave:SetText("Leave")
+  local leaderCB = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
+  leaderCB:SetWidth(20); leaderCB:SetHeight(20); leaderCB:SetPoint("LEFT", bLeave, "RIGHT", 8, 0)
+  leaderCB.text = leaderCB:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  leaderCB.text:SetPoint("LEFT", leaderCB, "RIGHT", 2, 0)
+  leaderCB.text:SetText("Group Leader")
+
+  local bSettings = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bSettings:SetWidth(90); bSettings:SetHeight(20); bSettings:SetPoint("TOPLEFT", bRename, "BOTTOMLEFT", 0, -4); bSettings:SetText("Settings")
+
+  local bYes = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bYes:SetWidth(70); bYes:SetHeight(20); bYes:SetPoint("TOPLEFT", line, "BOTTOMLEFT", 0, -6); bYes:SetText("Yes")
+  local bBackC = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bBackC:SetWidth(70); bBackC:SetHeight(20); bBackC:SetPoint("LEFT", bYes, "RIGHT", 6, 0); bBackC:SetText("Back")
+
+  local groupDD = CreateFrame("Frame", nil, frame, "UIDropDownMenuTemplate")
+  groupDD:SetPoint("TOPLEFT", line, "BOTTOMLEFT", -16, -4); UIDropDownMenu_SetWidth(120, groupDD)
+  local catDD = CreateFrame("Frame", nil, frame, "UIDropDownMenuTemplate")
+  catDD:SetPoint("LEFT", groupDD, "RIGHT", 6, 0); UIDropDownMenu_SetWidth(120, catDD)
+  local bBackD = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bBackD:SetWidth(60); bBackD:SetHeight(20); bBackD:SetPoint("LEFT", catDD, "RIGHT", -4, 2); bBackD:SetText("Back")
+
+  frame.dgGrowthLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  frame.dgGrowthLabel:SetPoint("TOPLEFT", line, "BOTTOMLEFT", 0, -6)
+  frame.dgGrowthLabel:SetText("Group expand direction:")
+  local growthDD = frame.growthDD
+  if growthDD then growthDD:ClearAllPoints(); growthDD:SetPoint("LEFT", frame.dgGrowthLabel, "RIGHT", -6, -2) end
+  local numLbl = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  numLbl:SetPoint("TOPLEFT", frame.dgGrowthLabel, "BOTTOMLEFT", 0, -10); numLbl:SetText("# of icons visible:")
+  local numDD = frame.numAurasDD
+  if numDD then numDD:ClearAllPoints(); numDD:SetPoint("LEFT", numLbl, "RIGHT", -6, -2) end
+  local spaceLbl = frame.spacingLabel
+  if spaceLbl then spaceLbl:ClearAllPoints(); spaceLbl:SetPoint("TOPLEFT", numLbl, "BOTTOMLEFT", 0, -12); spaceLbl:SetText("Spacing between icons:") end
+  local spaceS = frame.spacingSlider
+  if spaceS then spaceS:ClearAllPoints(); spaceS:SetPoint("LEFT", spaceLbl, "RIGHT", 10, 0) end
+  local spaceE = frame.spacingEdit
+  if spaceE then spaceE:ClearAllPoints(); spaceE:SetPoint("LEFT", spaceS, "RIGHT", 8, 0) end
+  local bBackSettings = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  bBackSettings:SetWidth(60); bBackSettings:SetHeight(20); bBackSettings:SetPoint("LEFT", spaceE, "RIGHT", 8, 0); bBackSettings:SetText("Back")
+
+  local all = { bNew,bExisting,bGroup,bCat,bBackA,nameLbl,nameIn,bAdd,bBackB,bRename,bLeave,leaderCB,bSettings,bYes,bBackC,groupDD,catDD,bBackD,frame.dgGrowthLabel,numLbl,bBackSettings }
+  local function HideAll() local i=1 while i<=table.getn(all) do all[i]:Hide(); i=i+1 end if growthDD then growthDD:Hide() end if numDD then numDD:Hide() end if spaceLbl then spaceLbl:Hide() end if spaceS then spaceS:Hide() end if spaceE then spaceE:Hide() end end
+
+  local function SetAddState()
+    local txt = _TrimName(nameIn:GetText() or "")
+    local list = _BuildNames(state.mode)
+    local dup = false
+    local i = 1
+    while i <= table.getn(list) do if string.upper(list[i]) == string.upper(txt) and list[i] ~= state._renameFrom then dup = true; break end i=i+1 end
+    if txt == "" or dup then bAdd:Disable() else bAdd:Enable() end
+  end
+
+  local function Join(kind, name)
+    local d = Ensure(); if not d then return end
+    if kind == "group" then
+      d.category = nil
+      d.group = name
+      d.isLeader = false
+      _EnsureUniqueLeader(name)
+      local hasLeader = false
+      for k2, s in pairs(_DA_DB().spells) do if s.group == name and s.isLeader then hasLeader = true; break end end
+      if not hasLeader then d.isLeader = true end
+      state.step = "ingroup"
+    else
+      d.group = nil
+      d.isLeader = false
+      d.category = name
+      local db = _DA_DB()
+      local found = false
+      local i=1 while i<=table.getn(db.categories) do if db.categories[i]==name then found=true break end i=i+1 end
+      if not found then table.insert(db.categories, name) end
+      state.step = "incategory"
+    end
+    RefreshAll()
+  end
+
+  local function LeaveCurrent()
+    local d = Ensure(); if not d then return end
+    if state.mode == "category" then
+      local old = d.category
+      d.category = nil
+      _CleanupCategoryIfEmpty(old)
+      state.step = "pick"
+    else
+      local old = d.group
+      local wasLeader = d.isLeader
+      d.group = nil; d.isLeader = false
+      if wasLeader and old then _EnsureUniqueLeader(old) end
+      _CleanupGroupIfEmpty(old)
+      state.step = "pick"
+    end
+    RefreshAll()
+  end
+
+  local function RenameAll(newName)
+    local d = Ensure(); if not d then return end
+    local from = state._renameFrom
+    if not from or from == "" then return end
+    if state.mode == "category" then
+      for _, s in pairs(_DA_DB().spells) do if s.category == from then s.category = newName end end
+      local db = _DA_DB(); local found=false; local i=1 while i<=table.getn(db.categories) do if db.categories[i]==from then db.categories[i]=newName; found=true end i=i+1 end
+      if not found then table.insert(db.categories, newName) end
+      _CleanupCategoryIfEmpty(from)
+      d.category = newName
+      state.step = "incategory"
+    else
+      for _, s in pairs(_DA_DB().spells) do if s.group == from then s.group = newName end end
+      local db = _DA_DB()
+      if db.groupSort and db.groupSort[from] ~= nil then db.groupSort[newName] = db.groupSort[from]; db.groupSort[from] = nil end
+      if db.groupFixed and db.groupFixed[from] ~= nil then db.groupFixed[newName] = db.groupFixed[from]; db.groupFixed[from] = nil end
+      d.group = newName
+      _CleanupGroupIfEmpty(from)
+      _EnsureUniqueLeader(newName)
+      state.step = "ingroup"
+    end
+    RefreshAll()
+  end
+
+  local function Refresh()
+    local d = Ensure(); if not d then return end
+    HideAll()
+    state.mode = nil
+    if d.group and d.group ~= "" then state.mode = "group"; state.step = state.step == "settings" and "settings" or "ingroup"
+    elseif d.category and d.category ~= "" then state.mode = "category"; state.step = "incategory"
+    elseif state.step ~= "newkind" and state.step ~= "newname" and state.step ~= "existing" then state.step = "pick" end
+
+    if state.step == "pick" then
+      line:SetText("If you want to Group or Categorize this icon, select an option below:")
+      bNew:Show(); bExisting:Show()
+    elseif state.step == "newkind" then
+      line:SetText("Would you like to place the icon in a new Group or Category?")
+      bGroup:Show(); bCat:Show(); bBackA:Show()
+    elseif state.step == "newname" then
+      line:SetText("Please select a unique name below:")
+      nameLbl:SetText(state.mode == "group" and "New Group name:" or "New Category name:")
+      nameLbl:Show(); nameIn:Show(); bAdd:Show(); bBackB:Show(); SetAddState()
+    elseif state.step == "incategory" then
+      line:SetText("Included in Category: " .. tostring(d.category or ""))
+      bRename:Show(); bLeave:Show()
+    elseif state.step == "ingroup" then
+      line:SetText("Included in Group: " .. tostring(d.group or ""))
+      bRename:Show(); bLeave:Show(); leaderCB:Show(); bSettings:Show()
+      leaderCB:SetChecked(d.isLeader and true or false)
+      if d.isLeader then leaderCB:Disable(); bSettings:Enable() else leaderCB:Enable(); bSettings:Disable() end
+    elseif state.step == "confirmleave" then
+      if state.mode == "group" then line:SetText("Are you sure you want the icon to leave the group?") else line:SetText("Are you sure you want the icon to leave the category?") end
+      bYes:Show(); bBackC:Show()
+    elseif state.step == "existing" then
+      line:SetText("Select what existing Group or Category you want to place the icon in:")
+      groupDD:Show(); catDD:Show(); bBackD:Show()
+      UIDropDownMenu_Initialize(groupDD, function()
+        local arr = _BuildNames("group")
+        local i=1 while i<=table.getn(arr) do local n=arr[i]; local info=UIDropDownMenu_CreateInfo(); info.text=n; info.value=n; info.func=function() Join("group", n) end; UIDropDownMenu_AddButton(info); i=i+1 end
+      end)
+      UIDropDownMenu_SetText("Group", groupDD)
+      UIDropDownMenu_Initialize(catDD, function()
+        local arr = _BuildNames("category")
+        local i=1 while i<=table.getn(arr) do local n=arr[i]; local info=UIDropDownMenu_CreateInfo(); info.text=n; info.value=n; info.func=function() Join("category", n) end; UIDropDownMenu_AddButton(info); i=i+1 end
+      end)
+      UIDropDownMenu_SetText("Category", catDD)
+    elseif state.step == "settings" then
+      line:SetText("Group settings")
+      frame.dgGrowthLabel:Show(); if growthDD then growthDD:Show() end
+      numLbl:Show(); if numDD then numDD:Show() end
+      if spaceLbl then spaceLbl:Show() end; if spaceS then spaceS:Show() end; if spaceE then spaceE:Show() end
+      if growthDD and frame.InitGrowthDropdown then
+        frame.InitGrowthDropdown(growthDD, d)
+        UIDropDownMenu_SetText(d.growth or "Horizontal Right", growthDD)
+      end
+      if numDD and frame.InitNumAurasDropdown then
+        frame.InitNumAurasDropdown(numDD, d)
+        UIDropDownMenu_SetText(tostring(d.numAuras or 5), numDD)
+      end
+      local settings = (DoiteAurasDB and DoiteAurasDB.settings)
+      local s = d.spacing
+      if not s then s = (settings and settings.spacing) or 8 end
+      if spaceS then spaceS:SetValue(s) end
+      if spaceE then spaceE:SetText(tostring(s)) end
+      bBackSettings:Show()
+    end
+  end
+
+  bNew:SetScript("OnClick", function() state.step = "newkind"; Refresh() end)
+  bExisting:SetScript("OnClick", function() state.step = "existing"; Refresh() end)
+  bGroup:SetScript("OnClick", function() state.mode = "group"; state.step = "newname"; state.rename=false; state._renameFrom=nil; nameIn:SetText(""); Refresh() end)
+  bCat:SetScript("OnClick", function() state.mode = "category"; state.step = "newname"; state.rename=false; state._renameFrom=nil; nameIn:SetText(""); Refresh() end)
+  bBackA:SetScript("OnClick", function() state.step = "pick"; Refresh() end)
+  bBackB:SetScript("OnClick", function() if state.rename then state.step = (state.mode == "group") and "ingroup" or "incategory" else state.step = "newkind" end; Refresh() end)
+  bRename:SetScript("OnClick", function() local d=Ensure(); state.rename=true; state._renameFrom=(state.mode=="group") and d.group or d.category; nameIn:SetText(state._renameFrom or ""); state.step="newname"; Refresh() end)
+  bLeave:SetScript("OnClick", function() state.step = "confirmleave"; Refresh() end)
+  bYes:SetScript("OnClick", function() LeaveCurrent(); Refresh() end)
+  bBackC:SetScript("OnClick", function() state.step = (state.mode == "group") and "ingroup" or "incategory"; Refresh() end)
+  bBackD:SetScript("OnClick", function() state.step = "pick"; Refresh() end)
+  bSettings:SetScript("OnClick", function() state.step = "settings"; Refresh() end)
+  bBackSettings:SetScript("OnClick", function() state.step = "ingroup"; Refresh() end)
+
+  leaderCB:SetScript("OnClick", function(self)
+    local d = Ensure(); if not d or not d.group then self:SetChecked(false); return end
+    if self:GetChecked() then
+      for k, s in pairs(_DA_DB().spells) do if s.group == d.group and k ~= state.key then s.isLeader = false end end
+      d.isLeader = true
+      self:SetChecked(true); self:Disable()
+      bSettings:Enable()
+      RefreshAll()
+    else
+      self:SetChecked(d.isLeader and true or false)
+    end
+  end)
+
+  nameIn:SetScript("OnTextChanged", function() SetAddState() end)
+  bAdd:SetScript("OnClick", function()
+    local picked = _TrimName(nameIn:GetText() or "")
+    if picked == "" then return end
+    if state.rename then RenameAll(picked) else Join(state.mode, picked) end
+    nameIn:SetText("")
+    Refresh()
+  end)
+
+  frame.DoiteGroupUIRefresh = function(_, key)
+    state.key = key
+    Refresh()
+  end
+  frame.DoiteGroupUIIsLeaderOrFree = function()
+    local d = Ensure()
+    if not d then return true end
+    if not d.group or d.group == "" then return true end
+    return d.isLeader == true
+  end
+end
