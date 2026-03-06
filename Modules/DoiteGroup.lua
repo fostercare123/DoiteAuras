@@ -986,8 +986,10 @@ local function _CleanupGroupIfEmpty(name)
 end
 
 function DoiteGroup._DG_UI_GetData(ctx)
-  if not ctx then return nil end
-  return ctx.api.Ensure(ctx.state.key)
+  if not ctx or not ctx.api or not ctx.api.Ensure then return nil end
+  local key = ctx.state and ctx.state.key
+  if not key or key == "" then return nil end
+  return ctx.api.Ensure(key)
 end
 
 function DoiteGroup._DG_UI_RefreshAll(ctx)
@@ -1161,12 +1163,24 @@ function DoiteGroup._DG_UI_InitExistingDD(ctx)
 end
 
 function DoiteGroup._DG_UI_Refresh(ctx)
-  local d = DoiteGroup._DG_UI_GetData(ctx)
-  if not d then return end
-
   local w = ctx.w
   local state = ctx.state
   DoiteGroup._DG_UI_HideAll(ctx)
+
+  if not state.key or state.key == "" then
+    state.step = "pick"
+    w.line:SetText("If you want to Group or Categorize this icon, select an option below:")
+    w.bNew:Show(); w.bExisting:Show()
+    return
+  end
+
+  local d = DoiteGroup._DG_UI_GetData(ctx)
+  if not d then
+    state.step = "pick"
+    w.line:SetText("If you want to Group or Categorize this icon, select an option below:")
+    w.bNew:Show(); w.bExisting:Show()
+    return
+  end
 
   state.mode = nil
   if d.group and d.group ~= "" then
