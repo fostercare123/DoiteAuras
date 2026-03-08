@@ -72,6 +72,15 @@ local ManualDurationBySpellId = {
   [11198] = 30, -- Rank 5
 
   ----------------------------------------------------------------
+  -- Gouge (5 ranks) - Flat 4s (Talent modifiable)
+  ----------------------------------------------------------------
+  [1776] = 4, -- Rank 1
+  [1777] = 4, -- Rank 2
+  [8629] = 4, -- Rank 3
+  [11285] = 4, -- Rank 4
+  [11286] = 4, -- Rank 5
+
+  ----------------------------------------------------------------
   -- Placeholder (# ranks) - None CP based
   ----------------------------------------------------------------  
   --[SpellID] = #,
@@ -635,6 +644,7 @@ _IsPlayerRogue = false
 local _CarnageRank = 0             -- druid: >0 enables Carnage proc logic
 local _TasteForBloodRank = 0       -- rogue: 0..3, adds +2s per point to manual Rupture
 local _ImprovedBladeTacticsRank = 0 -- rogue: 0..3, +15/30/45% to Slice and Dice manual duration
+local _ImprovedGougeRank = 0       -- rogue: 0..3, +0.5s per point to Gouge
 
 -- Druid Carnage proc detection
 local _FerociousBiteSpellIdCache = {} -- [spellId] = true/false
@@ -698,6 +708,7 @@ local function _UpdateTalentCaches()
   _CarnageRank = 0
   _TasteForBloodRank = 0
   _ImprovedBladeTacticsRank = 0
+  _ImprovedGougeRank = 0
 
   if not UnitClass then
     _IsPlayerDruid = false
@@ -721,6 +732,7 @@ local function _UpdateTalentCaches()
   local needCarnage = _IsPlayerDruid
   local needTaste = _IsPlayerRogue
   local needBlade = _IsPlayerRogue
+  local needGouge = _IsPlayerRogue
 
   local numTabs = tonumber(GetNumTalentTabs()) or 0
   local tab
@@ -743,7 +755,11 @@ local function _UpdateTalentCaches()
           _ImprovedBladeTacticsRank = tonumber(rank) or 0
           needBlade = false
         end
-        if (not needCarnage) and (not needTaste) and (not needBlade) then
+        if needGouge and norm == "improved gouge" then
+          _ImprovedGougeRank = tonumber(rank) or 0
+          needGouge = false
+        end
+        if (not needCarnage) and (not needTaste) and (not needBlade) and (not needGouge) then
           return
         end
       end
